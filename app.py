@@ -1,0 +1,870 @@
+import gradio as gr
+import pandas as pd
+from grocery_app import GroceryManager
+import os
+from dotenv import load_dotenv
+
+# Load environment variables first (searches parent directories)
+load_dotenv()
+
+# Try to import resend, but make it optional
+try:
+    import resend
+    RESEND_AVAILABLE = True
+    # Get API key from environment
+    api_key = os.environ.get('RESEND_API_KEY')
+    if api_key:
+        resend.api_key = api_key
+    else:
+        RESEND_AVAILABLE = False
+        print("Warning: RESEND_API_KEY not found in .env file")
+except ImportError:
+    RESEND_AVAILABLE = False
+    print("Warning: resend package not installed. Email functionality will be disabled.")
+    print("To enable email: run 'uv pip install resend' or 'pip install resend'")
+
+# Initialize the grocery manager
+grocery_manager = GroceryManager()
+
+# Define functions for the Gradio interface
+
+def get_store_items(store_name, category_filter=None):
+    """Get items for a specific store with optional category filter"""
+    items = grocery_manager.stores.get(store_name, [])
+    if category_filter and category_filter != "All Categories":
+        items = [item for item in items if item["category"] == category_filter]
+    
+    # Convert to DataFrame for display - include ID column
+    if items:
+        df = pd.DataFrame(items)
+        df = df[["id", "name", "category", "price", "unit"]]
+        return df
+    return pd.DataFrame(columns=["id", "name", "category", "price", "unit"])
+
+def get_categories(store_name):
+    """Get unique categories for a store"""
+    items = grocery_manager.stores.get(store_name, [])
+    categories = sorted(list(set(item["category"] for item in items)))
+    return ["All Categories"] + categories
+
+def add_to_cart(item_id, quantity):
+    """Add an item to the shopping list"""
+    # Find the item in any store
+    item = None
+    for store_items in grocery_manager.stores.values():
+        for store_item in store_items:
+            if store_item["id"] == item_id:
+                item = store_item
+                break
+        if item:
+            break
+    
+    if not item:
+        return "❌ Item not found"
+    
+    # Check if item is already in shopping list
+    for list_item in grocery_manager.shopping_list:
+        if list_item["id"] == item_id:
+            list_item["quantity"] += quantity
+            return f"✓ Updated {item['name']} quantity to {list_item['quantity']}"
+    
+    # Add new item to shopping list
+    cart_item = item.copy()
+    cart_item["quantity"] = quantity
+    grocery_manager.shopping_list.append(cart_item)
+    
+    return f"✓ Added {quantity} {item['name']} to cart"
+
+def remove_from_cart(item_id):
+    """Remove an item from the shopping list"""
+    if not item_id or item_id.strip() == "":
+        return "❌ Please select an item to remove", get_shopping_list()
+    
+    for i, item in enumerate(grocery_manager.shopping_list):
+        if item["id"] == item_id.strip():
+            removed_item = grocery_manager.shopping_list.pop(i)
+            return f"✅ Removed {removed_item['name']} from your list", get_shopping_list()
+    
+    return f"❌ Item not found in your shopping list (may have been already removed)", get_shopping_list()
+
+def update_item_quantity(item_id, new_quantity):
+    """Update the quantity of an item in the shopping list"""
+    if not item_id or item_id.strip() == "":
+        return "Please enter an item ID"
+    
+    if new_quantity < 1:
+        return "Quantity must be at least 1"
+    
+    for item in grocery_manager.shopping_list:
+        if item["id"] == item_id.strip():
+            old_qty = item["quantity"]
+            item["quantity"] = new_quantity
+            return f"✓ Updated {item['name']} quantity from {old_qty} to {new_quantity}"
+    
+    return f"❌ Item '{item_id}' not found in cart"
+
+def get_shopping_list():
+    """Get the current shopping list as a DataFrame"""
+    if not grocery_manager.shopping_list:
+        return pd.DataFrame(columns=["name", "store", "price", "quantity", "total", "id"])
+    
+    # Create DataFrame with calculated total per item
+    df = pd.DataFrame(grocery_manager.shopping_list)
+    df["total"] = df["price"] * df["quantity"]
+    df = df[["name", "store", "price", "quantity", "total", "id"]]
+    return df
+
+def get_shopping_list_by_store(store_name):
+    """Get shopping list filtered by store"""
+    store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+    
+    if not store_items:
+        return pd.DataFrame(columns=["name", "price", "quantity", "total", "id"])
+    
+    # Create DataFrame with calculated total per item
+    df = pd.DataFrame(store_items)
+    # Ensure numeric columns are properly typed
+    df["price"] = pd.to_numeric(df["price"], errors='coerce')
+    df["quantity"] = pd.to_numeric(df["quantity"], errors='coerce')
+    df["total"] = df["price"] * df["quantity"]
+    
+    # Return with all necessary columns
+    return df[["name", "price", "quantity", "total", "id"]]
+
+def get_store_total(store_name):
+    """Get total cost for a specific store"""
+    store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+    total = sum(item["price"] * item["quantity"] for item in store_items)
+    return f"${total:.2f}"
+
+def get_budget_status():
+    """Get the current budget status"""
+    total = sum(item["price"] * item["quantity"] for item in grocery_manager.shopping_list)
+    budget = grocery_manager.budget
+    remaining = budget - total
+    
+    status = f"Budget: ${budget:.2f}\nSpent: ${total:.2f}\nRemaining: ${remaining:.2f}"
+    
+    # Budget warning
+    if remaining < 0:
+        warning = "❌ OVER BUDGET! Consider removing items."
+    elif remaining < (budget * 0.1):
+        warning = "⚠️ Approaching budget limit!"
+    else:
+        warning = "✅ Budget on track"
+    
+    return status, warning, total / budget if budget > 0 else 0
+
+def update_budget(new_budget):
+    """Update the budget amount"""
+    try:
+        grocery_manager.budget = float(new_budget)
+        return f"Budget updated to ${new_budget}"
+    except ValueError:
+        return "Invalid budget value"
+
+def clear_shopping_list():
+    """Clear the entire shopping list"""
+    grocery_manager.shopping_list = []
+    return "Shopping list cleared", get_shopping_list()
+
+def _format_shopping_list(store_name):
+    """Format shopping list as readable markdown table"""
+    store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+    
+    if not store_items:
+        return f"*Your {store_name} shopping list is empty. Add items above to get started!*"
+    
+    # Create markdown table
+    table = "| **Item Name** | **Price** | **Quantity** | **Total** | **Actions** |\n"
+    table += "|---------------|-----------|--------------|-----------|-------------|\n"
+    
+    for item in store_items:
+        name = item['name']
+        price = f"${item['price']:.2f}"
+        qty = item['quantity']
+        total = f"${item['price'] * qty:.2f}"
+        table += f"| **{name}** | {price} | {qty} | {total} | ✏️ 🗑️ |\n"
+    
+    return table
+
+def find_item_by_name(item_name, store_name):
+    """Find an item in the shopping list by name"""
+    item_name_lower = item_name.lower().strip()
+    for item in grocery_manager.shopping_list:
+        if item.get("store") == store_name and item['name'].lower() == item_name_lower:
+            return item['id']
+    return None
+
+def add_catalog_item(store_name, name, category, price, unit):
+    """Add a new item to the store catalog"""
+    if not name or not category or price <= 0:
+        return "❌ Please fill in all fields with valid values"
+    
+    # Check for duplicate item name (case-insensitive)
+    store_items = grocery_manager.stores.get(store_name, [])
+    name_trimmed = name.strip().lower()
+    for item in store_items:
+        if item.get("name", "").lower() == name_trimmed:
+            return f"❌ Item '{name}' already exists in {store_name} catalog"
+    
+    # Generate new ID
+    prefix = store_name[:2].lower().replace(" ", "")
+    max_id = 0
+    for item in store_items:
+        item_id = item.get("id", "")
+        if item_id.startswith(prefix):
+            try:
+                num = int(item_id.split("-")[1])
+                max_id = max(max_id, num)
+            except:
+                pass
+    
+    new_id = f"{prefix}-{max_id + 1}"
+    
+    new_item = {
+        "id": new_id,
+        "name": name.strip(),
+        "category": category.strip(),
+        "price": float(price),
+        "unit": unit.strip(),
+        "store": store_name
+    }
+    
+    grocery_manager.stores[store_name].append(new_item)
+    return f"✅ Added {name} to {store_name} catalog"
+
+def delete_catalog_item(store_name, item_id):
+    """Delete an item from the store catalog"""
+    if not item_id or item_id.strip() == "":
+        return "❌ Please select an item to delete"
+    
+    store_items = grocery_manager.stores.get(store_name, [])
+    for i, item in enumerate(store_items):
+        if item["id"] == item_id.strip():
+            removed_item = store_items.pop(i)
+            return f"✅ Removed '{removed_item['name']}' from {store_name} catalog"
+    
+    return f"❌ Item not found in {store_name} catalog (may have been already deleted)"
+
+def send_shopping_list_email(store_name):
+    """Send shopping list email for a specific store"""
+    if not RESEND_AVAILABLE:
+        return "❌ Email functionality not available. Please install resend: uv pip install resend"
+    
+    try:
+        # Get items for this store
+        store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+        
+        if not store_items:
+            return f"❌ No items in your {store_name} list to email"
+        
+        # Calculate total
+        total = sum(item['price'] * item['quantity'] for item in store_items)
+        
+        # Create HTML email content
+        html_body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                h1 {{ color: #00bfff; }}
+                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+                th {{ background-color: #00bfff; color: white; padding: 12px; text-align: left; }}
+                td {{ padding: 10px; border-bottom: 1px solid #ddd; }}
+                tr:hover {{ background-color: #f5f5f5; }}
+                .total {{ font-size: 18px; font-weight: bold; margin-top: 20px; color: #00bfff; }}
+            </style>
+        </head>
+        <body>
+            <h1>🛒 {store_name} Shopping List</h1>
+            <p>Here's your shopping list for {store_name}:</p>
+            
+            <table>
+                <tr>
+                    <th>Item</th>
+                    <th>Price</th>
+                    <th>Quantity</th>
+                    <th>Total</th>
+                </tr>
+        """
+        
+        for item in store_items:
+            item_total = item['price'] * item['quantity']
+            html_body += f"""
+                <tr>
+                    <td>{item['name']}</td>
+                    <td>${item['price']:.2f}</td>
+                    <td>{item['quantity']}</td>
+                    <td>${item_total:.2f}</td>
+                </tr>
+            """
+        
+        html_body += f"""
+            </table>
+            
+            <p class="total">Total: ${total:.2f}</p>
+            
+            <p style="margin-top: 30px; color: #666;">
+                <em>Generated by Smart Grocery Manager</em>
+            </p>
+        </body>
+        </html>
+        """
+        
+        # Get recipient email from settings
+        recipient_email = grocery_manager.email_address
+        
+        if not recipient_email or recipient_email.strip() == "":
+            return "❌ Please set your email address in Settings first"
+        
+        # Send email using resend
+        response = resend.Emails.send({
+            "from": "onboarding@resend.dev",
+            "to": recipient_email,
+            "subject": f"🛒 {store_name} Shopping List - ${total:.2f}",
+            "html": html_body
+        })
+        
+        return f"✅ Email sent successfully to {recipient_email}!"
+        
+    except Exception as e:
+        return f"❌ Error sending email: {str(e)}"
+
+def build_store_tab(store_name):
+    """Build a clean, simple tab for a specific store"""
+    
+    gr.Markdown(f"## 🛒 {store_name}")
+    
+    # Two columns: Catalog and Shopping List
+    with gr.Row():
+        # LEFT COLUMN: CATALOG
+        with gr.Column(scale=1):
+            gr.Markdown("### 📋 Catalog")
+            
+            category_filter = gr.Dropdown(
+                choices=get_categories(store_name),
+                value="All Categories",
+                label="Filter by Category"
+            )
+            
+            catalog_table = gr.DataFrame(
+                value=lambda: get_store_items(store_name)[["name", "category", "price", "unit"]],
+                headers=["Name", "Category", "Price", "Unit"],
+                datatype=["str", "str", "number", "str"],
+                row_count=15,
+                col_count=(4, "fixed"),
+                interactive=False
+            )
+            
+            # Simple add item inputs
+            with gr.Row():
+                new_item_name = gr.Textbox(label="Name", placeholder="New item", scale=2)
+                new_item_price = gr.Number(label="Price", value=0, minimum=0, step=0.01, scale=1)
+            with gr.Row():
+                new_item_category = gr.Textbox(label="Category", placeholder="Category", scale=1)
+                new_item_unit = gr.Textbox(label="Unit", placeholder="lb", scale=1)
+            
+            # Simple catalog management buttons
+            with gr.Row():
+                add_catalog_btn = gr.Button("➕ Add to Catalog", variant="secondary", scale=1)
+                delete_catalog_btn = gr.Button("🗑️ Delete from Catalog", variant="stop", scale=1)
+        
+        # RIGHT COLUMN: SHOPPING LIST
+        with gr.Column(scale=1):
+            gr.Markdown("### 🛒 Shopping List")
+            
+            shopping_list_table = gr.DataFrame(
+                value=lambda: get_shopping_list_by_store(store_name)[["name", "price", "quantity", "total"]] if not get_shopping_list_by_store(store_name).empty else pd.DataFrame(columns=["name", "price", "quantity", "total"]),
+                headers=["Name", "Price", "Quantity", "Total"],
+                datatype=["str", "number", "number", "number"],
+                row_count=15,
+                col_count=(4, "fixed"),
+                interactive=False
+            )
+            
+            list_total = gr.Textbox(
+                label=f"💰 Total",
+                value="$0.00",
+                interactive=False
+            )
+            
+            # All list operations together - simple and clear!
+            add_to_list_btn = gr.Button("➕ Add to List (Qty: 1)", variant="primary", size="lg")
+            
+            # Selected item panel - shows which item you're editing
+            gr.Markdown("**Selected Item:**")
+            selected_item_display = gr.Textbox(
+                label="",
+                value="(Click an item above to select)",
+                interactive=False,
+                show_label=False
+            )
+            
+            with gr.Row():
+                update_quantity_dropdown = gr.Dropdown(
+                    label="Update Quantity",
+                    choices=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20],
+                    value=1,
+                    scale=2,
+                    interactive=True
+                )
+                update_quantity_btn = gr.Button("✏️ Update", variant="secondary", scale=1)
+            
+            with gr.Row():
+                remove_from_list_btn = gr.Button("🗑️ Remove", variant="stop", scale=1)
+                email_button = gr.Button("📧 Email List", variant="primary", scale=1)
+    
+    # Status messages
+    status_message = gr.Textbox(label="Status", show_label=False, placeholder="Select items and use buttons")
+    
+    # Hidden states
+    selected_catalog_item_id = gr.State(value=None)
+    selected_list_item_id = gr.State(value=None)
+    
+    # ═══════════════════════════════════════════════════════════════
+    # EVENT HANDLERS
+    # ═══════════════════════════════════════════════════════════════
+    
+    # Filter catalog by category
+    def filter_catalog(cat):
+        df = get_store_items(store_name, cat)
+        return df[["name", "category", "price", "unit"]]
+    
+    category_filter.change(
+        fn=filter_catalog,
+        inputs=[category_filter],
+        outputs=catalog_table
+    )
+    
+    # Select item from catalog
+    def select_catalog_item(evt: gr.SelectData, current_filter):
+        all_items = grocery_manager.stores.get(store_name, [])
+        df = get_store_items(store_name, current_filter)
+        
+        if df.empty or evt.index[0] >= len(df):
+            return None, "❌ Could not select item"
+        
+        item_name = df.iloc[evt.index[0]]["name"]
+        for item in all_items:
+            if item["name"] == item_name:
+                return item["id"], f"✓ Selected from catalog: {item_name}"
+        return None, "❌ Item not found"
+    
+    catalog_table.select(
+        fn=select_catalog_item,
+        inputs=[category_filter],
+        outputs=[selected_catalog_item_id, status_message]
+    )
+    
+    # Select item from shopping list - shows item details and current quantity
+    def select_list_item(evt: gr.SelectData):
+        store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+        
+        if not store_items or evt.index[0] >= len(store_items):
+            return None, "❌ Could not select item", "(Click an item above to select)", 1
+        
+        selected = store_items[evt.index[0]]
+        current_qty = selected.get("quantity", 1)
+        item_display = f"🛒 {selected['name']} - ${selected.get('price', 0):.2f} (Current qty: {current_qty})"
+        return selected["id"], f"✓ Selected: {selected['name']}", item_display, current_qty
+    
+    shopping_list_table.select(
+        fn=select_list_item,
+        outputs=[selected_list_item_id, status_message, selected_item_display, update_quantity_dropdown]
+    )
+    
+    # Add to List button - always adds quantity 1
+    def add_to_list_handler(item_id):
+        if not item_id:
+            return "❌ Please select an item from the catalog first", None, None, None
+        
+        msg = add_to_cart(item_id, 1)  # Always add quantity 1
+        df = get_shopping_list_by_store(store_name)
+        df_display = df[["name", "price", "quantity", "total"]] if not df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
+        return msg, df_display, get_store_total(store_name), None
+    
+    add_to_list_btn.click(
+        fn=add_to_list_handler,
+        inputs=[selected_catalog_item_id],
+        outputs=[status_message, shopping_list_table, list_total, selected_catalog_item_id]
+    )
+    
+    # Remove from List button
+    def remove_from_list_handler(item_id):
+        if not item_id:
+            return "❌ Please select an item from the shopping list first", None, None, "(Click an item above to select)", None
+        
+        for item in grocery_manager.shopping_list:
+            if item["id"] == item_id:
+                item_name = item["name"]
+                break
+        
+        msg = remove_from_cart(item_id)[0]
+        df = get_shopping_list_by_store(store_name)
+        df_display = df[["name", "price", "quantity", "total"]] if not df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
+        return msg, df_display, get_store_total(store_name), "(Click an item above to select)", None
+    
+    remove_from_list_btn.click(
+        fn=remove_from_list_handler,
+        inputs=[selected_list_item_id],
+        outputs=[status_message, shopping_list_table, list_total, selected_item_display, selected_list_item_id]
+    )
+    
+    # Update quantity for selected item
+    def update_quantity_handler(item_id, new_qty):
+        if not item_id:
+            return "❌ Please select an item from the shopping list first", None, None, "(Click an item above to select)"
+        
+        if new_qty < 1:
+            return "❌ Quantity must be at least 1", None, None, "(Click an item above to select)"
+        
+        # Find the item being updated to show in display
+        item_display = "(Click an item above to select)"
+        for item in grocery_manager.shopping_list:
+            if item["id"] == item_id:
+                item_display = f"✓ Updated: {item['name']} → Qty: {new_qty}"
+                break
+        
+        msg = update_item_quantity(item_id, int(new_qty))
+        df = get_shopping_list_by_store(store_name)
+        
+        # Make sure we have data before trying to slice columns
+        if not df.empty and "name" in df.columns:
+            df_display = df[["name", "price", "quantity", "total"]]
+        else:
+            df_display = pd.DataFrame(columns=["name", "price", "quantity", "total"])
+        
+        return msg, df_display, get_store_total(store_name), item_display
+    
+    update_quantity_btn.click(
+        fn=update_quantity_handler,
+        inputs=[selected_list_item_id, update_quantity_dropdown],
+        outputs=[status_message, shopping_list_table, list_total, selected_item_display]
+    )
+    
+    # Email list
+    email_button.click(
+        fn=lambda: send_shopping_list_email(store_name),
+        inputs=[],
+        outputs=[status_message]
+    )
+    
+    # Add new item to catalog
+    def add_new_catalog_item(name, category, price, unit):
+        msg = add_catalog_item(store_name, name, category, price, unit)
+        df = get_store_items(store_name)
+        df_display = df[["name", "category", "price", "unit"]]
+        return msg, df_display, "", 0, "", ""
+    
+    add_catalog_btn.click(
+        fn=add_new_catalog_item,
+        inputs=[new_item_name, new_item_category, new_item_price, new_item_unit],
+        outputs=[status_message, catalog_table, new_item_name, new_item_price, new_item_category, new_item_unit]
+    )
+    
+    # Delete selected item from catalog
+    def delete_selected_catalog_item(item_id):
+        if not item_id:
+            return "❌ Please click an item in the catalog first", None, None
+        
+        msg = delete_catalog_item(store_name, item_id)
+        df = get_store_items(store_name)
+        df_display = df[["name", "category", "price", "unit"]]
+        return msg, df_display, None
+    
+    delete_catalog_btn.click(
+        fn=delete_selected_catalog_item,
+        inputs=[selected_catalog_item_id],
+        outputs=[status_message, catalog_table, selected_catalog_item_id]
+    )
+
+# Create the Gradio interface
+with gr.Blocks(title="Smart Grocery Manager", css="footer {visibility: hidden}") as demo:
+    gr.Markdown("# 🛒 Smart Grocery Manager")
+    
+    with gr.Tabs() as tabs:
+        # Trader Joe's Tab
+        with gr.Tab("🛒 Trader Joe's"):
+            build_store_tab("Trader Joe's")
+            
+        # Safeway Tab
+        with gr.Tab("🛒 Safeway"):
+            build_store_tab("Safeway")
+            
+        # Costco Tab
+        with gr.Tab("🛒 Costco"):
+            build_store_tab("Costco")
+        
+        # Combined Shopping List Tab
+        with gr.Tab("📋 All Stores Summary"):
+            gr.Markdown("## Combined Shopping Lists - All Stores")
+            gr.Markdown("*View all your shopping lists across all three stores in one place*")
+            
+            with gr.Row():
+                refresh_all_button = gr.Button("🔄 Refresh All Lists", variant="primary", size="lg")
+            
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### 🛒 Trader Joe's (Weekly)")
+                    tj_total = gr.Textbox(label="Trader Joe's Total", value="$0.00", interactive=False)
+                    tj_cart = gr.DataFrame(
+                        value=lambda: get_shopping_list_by_store("Trader Joe's")[["name", "price", "quantity", "total"]] if not get_shopping_list_by_store("Trader Joe's").empty else pd.DataFrame(columns=["name", "price", "quantity", "total"]),
+                        headers=["Name", "Price", "Quantity", "Total"],
+                        datatype=["str", "number", "number", "number"],
+                        col_count=(4, "fixed"),
+                        interactive=False,
+                        row_count=5
+                    )
+                
+                with gr.Column():
+                    gr.Markdown("### 🛒 Safeway (Bi-weekly)")
+                    sf_total = gr.Textbox(label="Safeway Total", value="$0.00", interactive=False)
+                    sf_cart = gr.DataFrame(
+                        value=lambda: get_shopping_list_by_store("Safeway")[["name", "price", "quantity", "total"]] if not get_shopping_list_by_store("Safeway").empty else pd.DataFrame(columns=["name", "price", "quantity", "total"]),
+                        headers=["Name", "Price", "Quantity", "Total"],
+                        datatype=["str", "number", "number", "number"],
+                        col_count=(4, "fixed"),
+                        interactive=False,
+                        row_count=5
+                    )
+                
+                with gr.Column():
+                    gr.Markdown("### 🛒 Costco (Monthly)")
+                    co_total = gr.Textbox(label="Costco Total", value="$0.00", interactive=False)
+                    co_cart = gr.DataFrame(
+                        value=lambda: get_shopping_list_by_store("Costco")[["name", "price", "quantity", "total"]] if not get_shopping_list_by_store("Costco").empty else pd.DataFrame(columns=["name", "price", "quantity", "total"]),
+                        headers=["Name", "Price", "Quantity", "Total"],
+                        datatype=["str", "number", "number", "number"],
+                        col_count=(4, "fixed"),
+                        interactive=False,
+                        row_count=5
+                    )
+            
+            with gr.Row():
+                grand_total = gr.Textbox(label="💰 Grand Total (All Stores)", value="$0.00", interactive=False)
+            
+            # Refresh all carts when button is clicked
+            def refresh_all_lists():
+                # Get dataframes and remove ID column
+                tj_df = get_shopping_list_by_store("Trader Joe's")
+                tj_df = tj_df[["name", "price", "quantity", "total"]] if not tj_df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
+                
+                sf_df = get_shopping_list_by_store("Safeway")
+                sf_df = sf_df[["name", "price", "quantity", "total"]] if not sf_df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
+                
+                co_df = get_shopping_list_by_store("Costco")
+                co_df = co_df[["name", "price", "quantity", "total"]] if not co_df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
+                
+                return (
+                    tj_df,
+                    get_store_total("Trader Joe's"),
+                    sf_df,
+                    get_store_total("Safeway"),
+                    co_df,
+                    get_store_total("Costco"),
+                    f"${grocery_manager.get_total_cost():.2f}"
+                )
+            
+            refresh_all_button.click(
+                fn=refresh_all_lists,
+                inputs=[],
+                outputs=[tj_cart, tj_total, sf_cart, sf_total, co_cart, co_total, grand_total]
+            )
+        
+        # Budget Tracker Tab
+        with gr.Tab("Budget Tracker"):
+            gr.Markdown("## Budget Status")
+            
+            with gr.Row():
+                refresh_budget_button = gr.Button("🔄 Refresh Budget", variant="primary")
+            
+            # Store-by-store breakdown
+            gr.Markdown("### 💵 Spending Breakdown by Store")
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("**🛒 Trader Joe's (Weekly)**")
+                    tj_budget_spent = gr.Textbox(label="Spent", value="$0.00", interactive=False)
+                    tj_budget_limit = gr.Textbox(label="Budget", value="$200.00", interactive=False)
+                    tj_budget_status = gr.Markdown()
+                
+                with gr.Column():
+                    gr.Markdown("**🛒 Safeway (Bi-weekly)**")
+                    sf_budget_spent = gr.Textbox(label="Spent", value="$0.00", interactive=False)
+                    sf_budget_limit = gr.Textbox(label="Budget", value="$150.00", interactive=False)
+                    sf_budget_status = gr.Markdown()
+                
+                with gr.Column():
+                    gr.Markdown("**🛒 Costco (Monthly)**")
+                    co_budget_spent = gr.Textbox(label="Spent", value="$0.00", interactive=False)
+                    co_budget_limit = gr.Textbox(label="Budget", value="$300.00", interactive=False)
+                    co_budget_status = gr.Markdown()
+            
+            # Overall budget status
+            gr.Markdown("### 📊 Overall Budget")
+            with gr.Row():
+                with gr.Column():
+                    budget_status = gr.Textbox(label="Budget Summary", lines=4)
+                    budget_warning = gr.Markdown()
+                with gr.Column():
+                    budget_progress = gr.Slider(
+                        minimum=0, maximum=1, value=0, 
+                        label="Budget Usage %", 
+                        interactive=False
+                    )
+            
+            # Function to update all budget components
+            def update_budget_display():
+                status, warning, progress = get_budget_status()
+                
+                # Get spending by store
+                tj_spent_val = float(get_store_total("Trader Joe's").replace("$", ""))
+                sf_spent_val = float(get_store_total("Safeway").replace("$", ""))
+                co_spent_val = float(get_store_total("Costco").replace("$", ""))
+                
+                # Get budget limits
+                tj_budget = grocery_manager.store_budgets.get("Trader Joe's", 200.0)
+                sf_budget = grocery_manager.store_budgets.get("Safeway", 150.0)
+                co_budget = grocery_manager.store_budgets.get("Costco", 300.0)
+                
+                # Calculate status for each store
+                def get_store_status(spent, budget):
+                    if budget == 0:
+                        return ""
+                    pct = (spent / budget) * 100
+                    if spent > budget:
+                        return f"### ⚠️ Over budget by ${spent - budget:.2f}!"
+                    elif pct > 90:
+                        return f"### 🟡 {pct:.0f}% used - Close to limit!"
+                    elif pct > 75:
+                        return f"### 🟢 {pct:.0f}% used"
+                    else:
+                        return f"### ✅ {pct:.0f}% used - Good!"
+                
+                tj_status = get_store_status(tj_spent_val, tj_budget)
+                sf_status = get_store_status(sf_spent_val, sf_budget)
+                co_status = get_store_status(co_spent_val, co_budget)
+                
+                return (
+                    f"${tj_spent_val:.2f}", f"${tj_budget:.2f}", tj_status,
+                    f"${sf_spent_val:.2f}", f"${sf_budget:.2f}", sf_status,
+                    f"${co_spent_val:.2f}", f"${co_budget:.2f}", co_status,
+                    status, f"### {warning}", progress
+                )
+            
+            # Refresh budget when button is clicked
+            refresh_budget_button.click(
+                fn=update_budget_display,
+                inputs=[],
+                outputs=[
+                    tj_budget_spent, tj_budget_limit, tj_budget_status,
+                    sf_budget_spent, sf_budget_limit, sf_budget_status,
+                    co_budget_spent, co_budget_limit, co_budget_status,
+                    budget_status, budget_warning, budget_progress
+                ]
+            )
+            
+            # Update budget display on page load
+            demo.load(
+                fn=update_budget_display,
+                inputs=[],
+                outputs=[
+                    tj_budget_spent, tj_budget_limit, tj_budget_status,
+                    sf_budget_spent, sf_budget_limit, sf_budget_status,
+                    co_budget_spent, co_budget_limit, co_budget_status,
+                    budget_status, budget_warning, budget_progress
+                ]
+            )
+        
+        # Settings Tab
+        with gr.Tab("Settings"):
+            gr.Markdown("## Application Settings")
+            
+            # Email Settings
+            gr.Markdown("### 📧 Email Settings")
+            with gr.Row():
+                email_input = gr.Textbox(
+                    label="Email Address (for shopping list emails)",
+                    value=grocery_manager.email_address,
+                    placeholder="your.email@example.com",
+                    scale=3
+                )
+                save_email_btn = gr.Button("💾 Save Email", variant="secondary", scale=1)
+            
+            email_status = gr.Textbox(label="Status", value="", show_label=False)
+            
+            # Email save function
+            def save_email(email):
+                if not email or "@" not in email:
+                    return "❌ Please enter a valid email address"
+                grocery_manager.email_address = email
+                return f"✅ Email saved: {email}"
+            
+            save_email_btn.click(
+                fn=save_email,
+                inputs=[email_input],
+                outputs=[email_status]
+            )
+            
+            gr.Markdown("---")
+            
+            # Budget Settings
+            gr.Markdown("### 💰 Budget Settings")
+            gr.Markdown("**🛒 Individual Store Budgets**")
+            
+            # Individual store budgets
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("Trader Joe's (Weekly)")
+                    tj_budget_input = gr.Number(
+                        label="Budget ($)", 
+                        value=grocery_manager.store_budgets.get("Trader Joe's", 200), 
+                        minimum=0
+                    )
+                
+                with gr.Column():
+                    gr.Markdown("Safeway (Bi-weekly)")
+                    sf_budget_input = gr.Number(
+                        label="Budget ($)", 
+                        value=grocery_manager.store_budgets.get("Safeway", 150), 
+                        minimum=0
+                    )
+                
+                with gr.Column():
+                    gr.Markdown("Costco (Monthly)")
+                    co_budget_input = gr.Number(
+                        label="Budget ($)", 
+                        value=grocery_manager.store_budgets.get("Costco", 300), 
+                        minimum=0
+                    )
+            
+            gr.Markdown("### 💰 Total Budget")
+            with gr.Row():
+                total_budget_input = gr.Number(
+                    label="Total Budget ($)", 
+                    value=grocery_manager.budget, 
+                    minimum=1
+                )
+                update_budget_button = gr.Button("💾 Save All Budgets", variant="primary")
+            
+            budget_message = gr.Textbox(label="Status", value="Set your budgets above and click Save")
+            
+            # Update budget function
+            def save_budgets(tj_budget, sf_budget, co_budget, total_budget):
+                grocery_manager.store_budgets = {
+                    "Trader Joe's": tj_budget,
+                    "Safeway": sf_budget,
+                    "Costco": co_budget
+                }
+                grocery_manager.budget = total_budget
+                
+                return f"✅ Budgets saved! TJ: ${tj_budget:.2f} | Safeway: ${sf_budget:.2f} | Costco: ${co_budget:.2f} | Total: ${total_budget:.2f}"
+            
+            update_budget_button.click(
+                fn=save_budgets,
+                inputs=[tj_budget_input, sf_budget_input, co_budget_input, total_budget_input],
+                outputs=budget_message
+            )
+
+if __name__ == "__main__":
+    demo.launch()
