@@ -349,13 +349,23 @@ def build_store_tab(store_name):
             )
             
             catalog_table = gr.DataFrame(
-                value=lambda: get_store_items(store_name)[["name", "category", "price", "unit"]],
-                headers=["Name", "Category", "Price", "Unit"],
-                datatype=["str", "str", "number", "str"],
+                value=pd.DataFrame(columns=["☑", "name", "category", "price", "unit"]),
+                headers=["☑", "Name", "Category", "Price", "Unit"],
+                datatype=["str", "str", "str", "number", "str"],
                 row_count=15,
-                col_count=(4, "fixed"),
+                col_count=(5, "fixed"),
                 interactive=False
             )
+            
+            # Selected items display (for multi-select)
+            selected_catalog_items_display = gr.Textbox(
+                label="✓ Selected Items",
+                value="No items selected",
+                interactive=False
+            )
+            
+            # Clear selections button
+            clear_selections_btn = gr.Button("✗ Clear All Selections", variant="secondary", size="sm")
             
             # Simple add item inputs
             with gr.Row():
@@ -389,8 +399,8 @@ def build_store_tab(store_name):
                 interactive=False
             )
             
-            # All list operations together - simple and clear!
-            add_to_list_btn = gr.Button("➕ Add to List (Qty: 1)", variant="primary", size="lg")
+            # Add button - adds all selected items (qty 1 each)
+            add_to_list_btn = gr.Button("➕ Add Selected Items to List", variant="primary", size="lg")
             
             # Selected item panel - shows which item you're editing
             gr.Markdown("**Selected Item:**")
@@ -419,42 +429,116 @@ def build_store_tab(store_name):
     status_message = gr.Textbox(label="Status", show_label=False, placeholder="Select items and use buttons")
     
     # Hidden states
-    selected_catalog_item_id = gr.State(value=None)
+    selected_catalog_item_ids = gr.State(value=[])  # Changed to list for multi-select
     selected_list_item_id = gr.State(value=None)
     
     # ═══════════════════════════════════════════════════════════════
     # EVENT HANDLERS
     # ═══════════════════════════════════════════════════════════════
     
+    # Helper function to add checkmark column
+    def add_checkmark_column(df, selected_ids):
+        """Add a checkmark column to show selected items"""
+        if df.empty:
+            return df
+        
+        # Get item IDs for the dataframe
+        all_items = grocery_manager.stores.get(store_name, [])
+        
+        # Create checkmark column
+        checkmarks = []
+        for idx, row in df.iterrows():
+            item_name = row["name"]
+            # Find the item ID
+            item_id = None
+            for item in all_items:
+                if item["name"] == item_name:
+                    item_id = item["id"]
+                    break
+            
+            # Add checkmark if selected
+            if item_id and item_id in (selected_ids or []):
+                checkmarks.append("✓")
+            else:
+                checkmarks.append("")
+        
+        # Insert checkmark column at the front
+        df.insert(0, "☑", checkmarks)
+        return df
+    
     # Filter catalog by category
-    def filter_catalog(cat):
+    def filter_catalog(cat, selected_ids):
         df = get_store_items(store_name, cat)
-        return df[["name", "category", "price", "unit"]]
+        df = df[["name", "category", "price", "unit"]].copy()
+        df = add_checkmark_column(df, selected_ids)
+        return df
     
     category_filter.change(
         fn=filter_catalog,
-        inputs=[category_filter],
+        inputs=[category_filter, selected_catalog_item_ids],
         outputs=catalog_table
     )
     
-    # Select item from catalog
-    def select_catalog_item(evt: gr.SelectData, current_filter):
+    # Select item from catalog (multi-select with toggle)
+    def select_catalog_item(evt: gr.SelectData, current_filter, current_selections):
         all_items = grocery_manager.stores.get(store_name, [])
         df = get_store_items(store_name, current_filter)
         
         if df.empty or evt.index[0] >= len(df):
-            return None, "❌ Could not select item"
+            df_display = df[["name", "category", "price", "unit"]].copy()
+            df_display = add_checkmark_column(df_display, current_selections)
+            return current_selections, "❌ Could not select item", "No items selected", df_display
         
         item_name = df.iloc[evt.index[0]]["name"]
+        item_id = None
+        
+        # Find the item ID
         for item in all_items:
             if item["name"] == item_name:
-                return item["id"], f"✓ Selected from catalog: {item_name}"
-        return None, "❌ Item not found"
+                item_id = item["id"]
+                break
+        
+        if not item_id:
+            df_display = df[["name", "category", "price", "unit"]].copy()
+            df_display = add_checkmark_column(df_display, current_selections)
+            return current_selections, "❌ Item not found", "No items selected", df_display
+        
+        # Toggle selection: if already selected, remove it; otherwise add it
+        if current_selections is None:
+            current_selections = []
+        
+        if item_id in current_selections:
+            # Deselect
+            current_selections.remove(item_id)
+            msg = f"➖ Deselected: {item_name}"
+        else:
+            # Select
+            current_selections.append(item_id)
+            msg = f"➕ Selected: {item_name}"
+        
+        # Create display text
+        if len(current_selections) == 0:
+            display_text = "No items selected"
+        else:
+            # Get names of selected items
+            selected_names = []
+            for sel_id in current_selections:
+                for item in all_items:
+                    if item["id"] == sel_id:
+                        selected_names.append(item["name"])
+                        break
+            display_text = f"Selected {len(current_selections)} items: " + ", ".join(selected_names)
+        
+        # Update catalog table with checkmarks
+        df_display = df[["name", "category", "price", "unit"]].copy()
+        df_display = add_checkmark_column(df_display, current_selections)
+        
+        return current_selections, msg, display_text, df_display
     
     catalog_table.select(
         fn=select_catalog_item,
-        inputs=[category_filter],
-        outputs=[selected_catalog_item_id, status_message]
+        inputs=[category_filter, selected_catalog_item_ids],
+        outputs=[selected_catalog_item_ids, status_message, selected_catalog_items_display, catalog_table]
     )
     
     # Select item from shopping list - shows item details and current quantity
@@ -474,20 +558,45 @@ def build_store_tab(store_name):
         outputs=[selected_list_item_id, status_message, selected_item_display, update_quantity_dropdown]
     )
     
-    # Add to List button - always adds quantity 1
-    def add_to_list_handler(item_id):
-        if not item_id:
-            return "❌ Please select an item from the catalog first", None, None, None
+    # Add to List button - adds all selected items (quantity 1 each)
+    def add_to_list_handler(item_ids, current_filter):
+        if not item_ids or len(item_ids) == 0:
+            return "❌ Please select at least one item from the catalog first", None, None, [], "No items selected", None
         
-        msg = add_to_cart(item_id, 1)  # Always add quantity 1
+        # Add all selected items
+        added_items = []
+        for item_id in item_ids:
+            msg = add_to_cart(item_id, 1)  # Add 1 of each item
+            # Extract item name from message
+            if "Added" in msg or "Updated" in msg:
+                # Find item name
+                for item in grocery_manager.stores.get(store_name, []):
+                    if item["id"] == item_id:
+                        added_items.append(item["name"])
+                        break
+        
+        # Create success message
+        if len(added_items) == 1:
+            success_msg = f"✅ Added {added_items[0]} to list"
+        else:
+            success_msg = f"✅ Added {len(added_items)} items to list: " + ", ".join(added_items)
+        
+        # Get updated shopping list
         df = get_shopping_list_by_store(store_name)
         df_display = df[["name", "price", "quantity", "total"]] if not df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
-        return msg, df_display, get_store_total(store_name), None
+        
+        # Update catalog table without checkmarks (clear selections)
+        catalog_df = get_store_items(store_name, current_filter)
+        catalog_df = catalog_df[["name", "category", "price", "unit"]].copy()
+        catalog_df = add_checkmark_column(catalog_df, [])  # Empty list = no checkmarks
+        
+        # Clear selections after adding
+        return success_msg, df_display, get_store_total(store_name), [], "No items selected", catalog_df
     
     add_to_list_btn.click(
         fn=add_to_list_handler,
-        inputs=[selected_catalog_item_id],
-        outputs=[status_message, shopping_list_table, list_total, selected_catalog_item_id]
+        inputs=[selected_catalog_item_ids, category_filter],
+        outputs=[status_message, shopping_list_table, list_total, selected_catalog_item_ids, selected_catalog_items_display, catalog_table]
     )
     
     # Remove from List button
@@ -513,34 +622,50 @@ def build_store_tab(store_name):
     
     # Update quantity for selected item
     def update_quantity_handler(item_id, new_qty):
-        if not item_id:
-            return "❌ Please select an item from the shopping list first", None, None, "(Click an item above to select)"
-        
-        if new_qty < 1:
-            return "❌ Quantity must be at least 1", None, None, "(Click an item above to select)"
-        
-        # Find the item being updated to show in display
-        item_display = "(Click an item above to select)"
-        for item in grocery_manager.shopping_list:
-            if item["id"] == item_id:
-                item_display = f"✓ Updated: {item['name']} → Qty: {new_qty}"
-                break
-        
-        msg = update_item_quantity(item_id, int(new_qty))
+        # Get current shopping list to avoid clearing it on error
         df = get_shopping_list_by_store(store_name)
-        
-        # Make sure we have data before trying to slice columns
         if not df.empty and "name" in df.columns:
             df_display = df[["name", "price", "quantity", "total"]]
         else:
             df_display = pd.DataFrame(columns=["name", "price", "quantity", "total"])
         
-        return msg, df_display, get_store_total(store_name), item_display
+        current_total = get_store_total(store_name)
+        
+        if not item_id:
+            return "❌ Please select an item from the shopping list first", df_display, current_total, "(Click an item above to select)", 1, None
+        
+        if new_qty < 1:
+            return "❌ Quantity must be at least 1", df_display, current_total, "(Click an item above to select)", 1, None
+        
+        # Find the item name for success message
+        item_name = ""
+        for item in grocery_manager.shopping_list:
+            if item["id"] == item_id:
+                item_name = item['name']
+                break
+        
+        # Update the quantity
+        msg = update_item_quantity(item_id, int(new_qty))
+        
+        # Refresh shopping list after update
+        df = get_shopping_list_by_store(store_name)
+        if not df.empty and "name" in df.columns:
+            df_display = df[["name", "price", "quantity", "total"]]
+        else:
+            df_display = pd.DataFrame(columns=["name", "price", "quantity", "total"])
+        
+        # After successful update, reset everything to clean state
+        success_msg = f"✅ Updated {item_name} to quantity {new_qty}"
+        clean_display = "(Click an item above to select)"
+        reset_dropdown = 1
+        clear_selection = None
+        
+        return success_msg, df_display, get_store_total(store_name), clean_display, reset_dropdown, clear_selection
     
     update_quantity_btn.click(
         fn=update_quantity_handler,
         inputs=[selected_list_item_id, update_quantity_dropdown],
-        outputs=[status_message, shopping_list_table, list_total, selected_item_display]
+        outputs=[status_message, shopping_list_table, list_total, selected_item_display, update_quantity_dropdown, selected_list_item_id]
     )
     
     # Email list
@@ -563,21 +688,61 @@ def build_store_tab(store_name):
         outputs=[status_message, catalog_table, new_item_name, new_item_price, new_item_category, new_item_unit]
     )
     
-    # Delete selected item from catalog
-    def delete_selected_catalog_item(item_id):
-        if not item_id:
-            return "❌ Please click an item in the catalog first", None, None
+    # Delete selected items from catalog
+    def delete_selected_catalog_items(item_ids):
+        if not item_ids or len(item_ids) == 0:
+            return "❌ Please select at least one item from the catalog first", None, [], "No items selected"
         
-        msg = delete_catalog_item(store_name, item_id)
+        # Delete all selected items
+        deleted_items = []
+        for item_id in item_ids:
+            # Find item name before deleting
+            for item in grocery_manager.stores.get(store_name, []):
+                if item["id"] == item_id:
+                    deleted_items.append(item["name"])
+                    break
+            delete_catalog_item(store_name, item_id)
+        
+        # Create success message
+        if len(deleted_items) == 1:
+            msg = f"✅ Removed '{deleted_items[0]}' from catalog"
+        else:
+            msg = f"✅ Removed {len(deleted_items)} items from catalog"
+        
         df = get_store_items(store_name)
         df_display = df[["name", "category", "price", "unit"]]
-        return msg, df_display, None
+        
+        # Clear selections after deleting
+        return msg, df_display, [], "No items selected"
     
     delete_catalog_btn.click(
-        fn=delete_selected_catalog_item,
-        inputs=[selected_catalog_item_id],
-        outputs=[status_message, catalog_table, selected_catalog_item_id]
+        fn=delete_selected_catalog_items,
+        inputs=[selected_catalog_item_ids],
+        outputs=[status_message, catalog_table, selected_catalog_item_ids, selected_catalog_items_display]
     )
+    
+    # Clear all selections button
+    def clear_all_selections(current_filter):
+        # Update catalog table without checkmarks
+        catalog_df = get_store_items(store_name, current_filter)
+        catalog_df = catalog_df[["name", "category", "price", "unit"]].copy()
+        catalog_df = add_checkmark_column(catalog_df, [])  # Empty list = no checkmarks
+        
+        return [], "No items selected", "✓ Cleared all selections", catalog_df
+    
+    clear_selections_btn.click(
+        fn=clear_all_selections,
+        inputs=[category_filter],
+        outputs=[selected_catalog_item_ids, selected_catalog_items_display, status_message, catalog_table]
+    )
+    
+    # Initialize catalog table on page load
+    def init_catalog_table():
+        df = get_store_items(store_name)[["name", "category", "price", "unit"]].copy()
+        df = add_checkmark_column(df, [])
+        return df
+    
+    # Trigger catalog table initialization using demo.load later
 
 # Create the Gradio interface
 with gr.Blocks(title="Smart Grocery Manager", css="footer {visibility: hidden}") as demo:
