@@ -1,5 +1,9 @@
+import json
+import os
+
 class GroceryManager:
     def __init__(self):
+        self.catalog_file = "grocery_catalog.json"
         self.stores = {}
         self.shopping_list = []
         self.budget = 650.0  # Default total budget
@@ -9,7 +13,7 @@ class GroceryManager:
             "Costco": 300.0           # Monthly
         }
         self.email_address = "gandhali.aradhye@gmail.com"  # Default email
-        self._initialize_sample_data()
+        self._load_or_initialize_catalog()
 
     def _initialize_sample_data(self):
         """Initialize sample data for all stores"""
@@ -170,6 +174,31 @@ class GroceryManager:
         self.stores["Safeway"] = safeway_items
         self.stores["Costco"] = costco_items
     
+    def _load_or_initialize_catalog(self):
+        """Load catalog from JSON file or initialize with sample data"""
+        if os.path.exists(self.catalog_file):
+            try:
+                with open(self.catalog_file, 'r') as f:
+                    self.stores = json.load(f)
+                print(f"✓ Catalog loaded from {self.catalog_file}")
+            except Exception as e:
+                print(f"Warning: Could not load catalog file: {e}")
+                print("Initializing with default sample data...")
+                self._initialize_sample_data()
+        else:
+            print(f"No catalog file found. Creating new catalog at {self.catalog_file}")
+            self._initialize_sample_data()
+            self._save_catalog()
+    
+    def _save_catalog(self):
+        """Save catalog to JSON file"""
+        try:
+            with open(self.catalog_file, 'w') as f:
+                json.dump(self.stores, f, indent=2)
+            print(f"✓ Catalog saved to {self.catalog_file}")
+        except Exception as e:
+            print(f"Warning: Could not save catalog: {e}")
+    
     def get_store_items(self, store_name):
         """Get all items for a specific store"""
         return self.stores.get(store_name, [])
@@ -252,3 +281,24 @@ class GroceryManager:
         if category == "All":
             return items
         return [item for item in items if item['category'] == category]
+    
+    def update_catalog_item(self, item_id, name=None, category=None, price=None, unit=None):
+        """Update an existing catalog item"""
+        # Find the item in all stores
+        for store_name, items in self.stores.items():
+            for item in items:
+                if item['id'] == item_id:
+                    # Update fields if provided
+                    if name is not None:
+                        item['name'] = name
+                    if category is not None:
+                        item['category'] = category
+                    if price is not None:
+                        item['price'] = float(price)
+                    if unit is not None:
+                        item['unit'] = unit
+                    
+                    # Save to JSON
+                    self._save_catalog()
+                    return True
+        return False
