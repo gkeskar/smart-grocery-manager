@@ -3,6 +3,7 @@ import pandas as pd
 from grocery_app import GroceryManager  # pyright: ignore[reportMissingImports]
 import os
 from dotenv import load_dotenv
+import unicodedata
 
 # Load environment variables first (searches parent directories)
 load_dotenv()
@@ -27,6 +28,23 @@ except ImportError:
 grocery_manager = GroceryManager()
 
 # Define functions for the Gradio interface
+
+def normalize_text(text):
+    """
+    Normalize text by converting Unicode formatted characters (bold, italic, etc.) 
+    to regular ASCII equivalents. This fixes sorting issues when copy-pasting from websites.
+    """
+    if not text:
+        return text
+    
+    # NFD decomposes characters, then we filter out combining marks
+    # NFKD also handles compatibility characters (bold, italic, etc.)
+    normalized = unicodedata.normalize('NFKD', text)
+    
+    # Remove combining characters and keep only ASCII-compatible
+    ascii_text = ''.join(c for c in normalized if not unicodedata.combining(c))
+    
+    return ascii_text.strip()
 
 def get_store_items(store_name, category_filter=None):
     """Get items for a specific store with optional category filter"""
@@ -208,12 +226,16 @@ def add_catalog_item(store_name, name, category, price, unit):
     if not name or not category or price <= 0:
         return "❌ Please fill in all fields with valid values"
     
+    # Normalize text to remove Unicode formatting (bold, italic, etc.)
+    name_normalized = normalize_text(name.strip())
+    category_normalized = normalize_text(category.strip())
+    
     # Check for duplicate item name (case-insensitive)
     store_items = grocery_manager.stores.get(store_name, [])
-    name_trimmed = name.strip().lower()
+    name_trimmed = name_normalized.lower()
     for item in store_items:
         if item.get("name", "").lower() == name_trimmed:
-            return f"❌ Item '{name}' already exists in {store_name} catalog"
+            return f"❌ Item '{name_normalized}' already exists in {store_name} catalog"
     
     # Generate new ID
     prefix = store_name[:2].lower().replace(" ", "")
@@ -231,8 +253,8 @@ def add_catalog_item(store_name, name, category, price, unit):
     
     new_item = {
         "id": new_id,
-        "name": name.strip(),
-        "category": category.strip(),
+        "name": name_normalized,
+        "category": category_normalized,
         "price": float(price),
         "unit": unit.strip(),
         "store": store_name
@@ -240,7 +262,7 @@ def add_catalog_item(store_name, name, category, price, unit):
     
     grocery_manager.stores[store_name].append(new_item)
     grocery_manager._save_catalog()  # Persist to JSON file
-    return f"✅ Added {name} to {store_name} catalog (saved to file)"
+    return f"✅ Added {name_normalized} to {store_name} catalog (saved to file)"
 
 def delete_catalog_item(store_name, item_id):
     """Delete an item from the store catalog"""
@@ -858,11 +880,15 @@ def build_store_tab(store_name):
         if not name or not category or price <= 0:
             return "❌ Please fill in all fields with valid values", None, item_id, name, price, category, unit
         
+        # Normalize text to remove Unicode formatting (bold, italic, etc.)
+        name_normalized = normalize_text(name.strip())
+        category_normalized = normalize_text(category.strip())
+        
         # Update the item
         success = grocery_manager.update_catalog_item(
             item_id=item_id,
-            name=name.strip(),
-            category=category.strip(),
+            name=name_normalized,
+            category=category_normalized,
             price=float(price),
             unit=unit.strip()
         )
@@ -873,7 +899,7 @@ def build_store_tab(store_name):
             df_display = df[["name", "category", "price", "unit"]]
             
             # Clear edit fields after successful update
-            return f"✅ Updated '{name}' successfully (saved to file)", df_display, "", "", 0, None, ""
+            return f"✅ Updated '{name_normalized}' successfully (saved to file)", df_display, "", "", 0, None, ""
         else:
             return f"❌ Item not found", None, item_id, name, price, category, unit
     
