@@ -1,6 +1,6 @@
 import gradio as gr
 import pandas as pd
-from grocery_app import GroceryManager
+from grocery_app import GroceryManager  # pyright: ignore[reportMissingImports]
 import os
 from dotenv import load_dotenv
 
@@ -353,6 +353,14 @@ def send_shopping_list_email(store_name):
 def build_store_tab(store_name):
     """Build a clean, simple tab for a specific store"""
     
+    # Helper function to get shopping list items as dropdown choices
+    def get_shopping_list_items_for_dropdown():
+        """Returns list of item names for the item selector dropdown"""
+        store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+        if not store_items:
+            return []
+        return [f"{item['name']} (qty: {item['quantity']})" for item in store_items]
+    
     gr.Markdown(f"## 🛒 {store_name}")
     
     # Two columns: Catalog and Shopping List
@@ -451,19 +459,19 @@ def build_store_tab(store_name):
             # Add button - adds all selected items (qty 1 each)
             add_to_list_btn = gr.Button("➕ Add Selected Items to List", variant="primary", size="lg")
             
-            # Selected item panel - shows which item you're editing
-            gr.Markdown("**Selected Item:**")
-            selected_item_display = gr.Textbox(
-                label="",
-                value="(Click an item above to select)",
-                interactive=False,
-                show_label=False
-            )
-            
+            # Update quantity section - simpler dropdown approach
+            gr.Markdown("**Update Quantity:**")
             with gr.Row():
+                item_selector_dropdown = gr.Dropdown(
+                    label="Select Item to Update",
+                    choices=get_shopping_list_items_for_dropdown(),
+                    value=None,
+                    scale=3,
+                    interactive=True
+                )
                 update_quantity_dropdown = gr.Dropdown(
-                    label="Update Quantity",
-                    choices=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20],
+                    label="New Quantity",
+                    choices=[1, 2, 3, 4, 5],
                     value=1,
                     scale=2,
                     interactive=True
@@ -479,7 +487,6 @@ def build_store_tab(store_name):
     
     # Hidden states
     selected_catalog_item_ids = gr.State(value=[])  # Changed to list for multi-select
-    selected_list_item_id = gr.State(value=None)
     
     # ═══════════════════════════════════════════════════════════════
     # EVENT HANDLERS
@@ -534,7 +541,7 @@ def build_store_tab(store_name):
         df = get_store_items(store_name, current_filter)
         
         if df.empty or evt.index[0] >= len(df):
-            return current_selections, "❌ Could not select item", "No items selected"
+            return current_selections, "❌ Could not select item", "No items selected", "", "", 0, None, ""
         
         item_name = df.iloc[evt.index[0]]["name"]
         item_id = None
@@ -546,20 +553,19 @@ def build_store_tab(store_name):
                 break
         
         if not item_id:
-            return current_selections, "❌ Item not found", "No items selected"
+            return current_selections, "❌ Item not found", "No items selected", "", "", 0, None, ""
         
-        # Toggle selection: if already selected, remove it; otherwise add it
+        # Add-only selection (no toggle to avoid double-fire issues)
         if current_selections is None:
             current_selections = []
         
-        if item_id in current_selections:
-            # Deselect
-            current_selections.remove(item_id)
-            msg = f"➖ Deselected: {item_name}"
-        else:
-            # Select
+        # Only add if not already selected (prevent duplicates from double-fire)
+        if item_id not in current_selections:
             current_selections.append(item_id)
             msg = f"➕ Selected: {item_name}"
+        else:
+            # Already selected, don't change anything
+            msg = f"✓ Already selected: {item_name}"
         
         # Create display text
         if len(current_selections) == 0:
@@ -598,23 +604,6 @@ def build_store_tab(store_name):
                 selected_edit_item_id, edit_item_name, edit_item_price, edit_item_category, edit_item_unit]
     )
     
-    # Select item from shopping list - shows item details and current quantity
-    def select_list_item(evt: gr.SelectData):
-        store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
-        
-        if not store_items or evt.index[0] >= len(store_items):
-            return None, "❌ Could not select item", "(Click an item above to select)", 1
-        
-        selected = store_items[evt.index[0]]
-        current_qty = selected.get("quantity", 1)
-        item_display = f"🛒 {selected['name']} - ${selected.get('price', 0):.2f} (Current qty: {current_qty})"
-        return selected["id"], f"✓ Selected: {selected['name']}", item_display, current_qty
-    
-    shopping_list_table.select(
-        fn=select_list_item,
-        outputs=[selected_list_item_id, status_message, selected_item_display, update_quantity_dropdown]
-    )
-    
     # Add to List button - adds all selected items (quantity 1 each)
     def add_to_list_handler(item_ids, current_filter):
         if not item_ids or len(item_ids) == 0:
@@ -642,38 +631,55 @@ def build_store_tab(store_name):
         df = get_shopping_list_by_store(store_name)
         df_display = df[["name", "price", "quantity", "total"]] if not df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
         
+        # Get updated dropdown choices and reset value
+        dropdown_choices = get_shopping_list_items_for_dropdown()
+        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
+        
         # Clear selections after adding (no need to update catalog table)
-        return success_msg, df_display, get_store_total(store_name), [], "No items selected"
+        return success_msg, df_display, get_store_total(store_name), [], "No items selected", dropdown_update
     
     add_to_list_btn.click(
         fn=add_to_list_handler,
         inputs=[selected_catalog_item_ids, category_filter],
-        outputs=[status_message, shopping_list_table, list_total, selected_catalog_item_ids, selected_catalog_items_display]
+        outputs=[status_message, shopping_list_table, list_total, selected_catalog_item_ids, selected_catalog_items_display, item_selector_dropdown]
     )
     
     # Remove from List button
-    def remove_from_list_handler(item_id):
-        if not item_id:
-            return "❌ Please select an item from the shopping list first", None, None, "(Click an item above to select)", None
+    def remove_from_list_handler(selected_item):
+        if not selected_item:
+            return "❌ Please select an item from the dropdown first", None, None, gr.Dropdown(choices=[], value=None)
         
+        # Extract item name from dropdown selection (format: "Item Name (qty: X)")
+        item_name = selected_item.split(" (qty:")[0].strip()
+        
+        # Find item ID by name
+        item_id = None
         for item in grocery_manager.shopping_list:
-            if item["id"] == item_id:
-                item_name = item["name"]
+            if item.get("store") == store_name and item["name"] == item_name:
+                item_id = item["id"]
                 break
+        
+        if not item_id:
+            return "❌ Item not found", None, None, gr.Dropdown(choices=[], value=None)
         
         msg = remove_from_cart(item_id)[0]
         df = get_shopping_list_by_store(store_name)
         df_display = df[["name", "price", "quantity", "total"]] if not df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
-        return msg, df_display, get_store_total(store_name), "(Click an item above to select)", None
+        
+        # Get updated dropdown choices and reset value
+        dropdown_choices = get_shopping_list_items_for_dropdown()
+        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
+        
+        return msg, df_display, get_store_total(store_name), dropdown_update
     
     remove_from_list_btn.click(
         fn=remove_from_list_handler,
-        inputs=[selected_list_item_id],
-        outputs=[status_message, shopping_list_table, list_total, selected_item_display, selected_list_item_id]
+        inputs=[item_selector_dropdown],
+        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown]
     )
     
     # Update quantity for selected item
-    def update_quantity_handler(item_id, new_qty):
+    def update_quantity_handler(selected_item, new_qty):
         # Get current shopping list to avoid clearing it on error
         df = get_shopping_list_by_store(store_name)
         if not df.empty and "name" in df.columns:
@@ -682,19 +688,26 @@ def build_store_tab(store_name):
             df_display = pd.DataFrame(columns=["name", "price", "quantity", "total"])
         
         current_total = get_store_total(store_name)
+        dropdown_choices = get_shopping_list_items_for_dropdown()
         
-        if not item_id:
-            return "❌ Please select an item from the shopping list first", df_display, current_total, "(Click an item above to select)", 1, None
+        if not selected_item:
+            return "❌ Please select an item from the dropdown first", df_display, current_total, gr.Dropdown(choices=dropdown_choices, value=None)
         
         if new_qty < 1:
-            return "❌ Quantity must be at least 1", df_display, current_total, "(Click an item above to select)", 1, None
+            return "❌ Quantity must be at least 1", df_display, current_total, gr.Dropdown(choices=dropdown_choices, value=None)
         
-        # Find the item name for success message
-        item_name = ""
+        # Extract item name from dropdown selection (format: "Item Name (qty: X)")
+        item_name = selected_item.split(" (qty:")[0].strip()
+        
+        # Find item ID by name
+        item_id = None
         for item in grocery_manager.shopping_list:
-            if item["id"] == item_id:
-                item_name = item['name']
+            if item.get("store") == store_name and item["name"] == item_name:
+                item_id = item["id"]
                 break
+        
+        if not item_id:
+            return "❌ Item not found", df_display, current_total, gr.Dropdown(choices=dropdown_choices, value=None)
         
         # Update the quantity
         msg = update_item_quantity(item_id, int(new_qty))
@@ -706,18 +719,19 @@ def build_store_tab(store_name):
         else:
             df_display = pd.DataFrame(columns=["name", "price", "quantity", "total"])
         
-        # After successful update, reset everything to clean state
-        success_msg = f"✅ Updated {item_name} to quantity {new_qty}"
-        clean_display = "(Click an item above to select)"
-        reset_dropdown = 1
-        clear_selection = None
+        # Get updated dropdown choices (with new quantities) and reset value
+        dropdown_choices = get_shopping_list_items_for_dropdown()
+        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
         
-        return success_msg, df_display, get_store_total(store_name), clean_display, reset_dropdown, clear_selection
+        # After successful update
+        success_msg = f"✅ Updated {item_name} to quantity {new_qty}"
+        
+        return success_msg, df_display, get_store_total(store_name), dropdown_update
     
     update_quantity_btn.click(
         fn=update_quantity_handler,
-        inputs=[selected_list_item_id, update_quantity_dropdown],
-        outputs=[status_message, shopping_list_table, list_total, selected_item_display, update_quantity_dropdown, selected_list_item_id]
+        inputs=[item_selector_dropdown, update_quantity_dropdown],
+        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown]
     )
     
     # Email list
