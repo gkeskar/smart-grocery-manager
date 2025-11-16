@@ -354,12 +354,53 @@ def build_store_tab(store_name):
     """Build a clean, simple tab for a specific store"""
     
     # Helper function to get shopping list items as dropdown choices
-    def get_shopping_list_items_for_dropdown():
-        """Returns list of item names for the item selector dropdown"""
+    def get_shopping_list_items_for_dropdown(category="All Categories"):
+        """Returns list of item names for the item selector dropdown, optionally filtered by category"""
         store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+        
+        # Filter by category if not "All Categories"
+        if category != "All Categories":
+            store_items = [item for item in store_items if item.get("category") == category]
+        
         if not store_items:
             return []
         return [f"{item['name']} (qty: {item['quantity']})" for item in store_items]
+    
+    # Helper function to get filtered shopping list
+    def get_filtered_shopping_list(category="All Categories"):
+        """Returns shopping list dataframe filtered by category"""
+        # Get shopping list items for this store
+        store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+        
+        if not store_items:
+            return pd.DataFrame(columns=["name", "price", "quantity", "total"])
+        
+        # Filter by category if not "All Categories"
+        if category != "All Categories":
+            store_items = [item for item in store_items if item.get("category") == category]
+        
+        if not store_items:
+            return pd.DataFrame(columns=["name", "price", "quantity", "total"])
+        
+        # Create DataFrame
+        df = pd.DataFrame(store_items)
+        df["total"] = df["price"] * df["quantity"]
+        return df[["name", "price", "quantity", "total"]]
+    
+    # Helper function to get filtered total
+    def get_filtered_total(category="All Categories"):
+        """Calculate total for filtered category"""
+        store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+        
+        # Filter by category if not "All Categories"
+        if category != "All Categories":
+            store_items = [item for item in store_items if item.get("category") == category]
+        
+        if not store_items:
+            return "$0.00"
+        
+        total = sum(item['price'] * item['quantity'] for item in store_items)
+        return f"${total:.2f}"
     
     gr.Markdown(f"## 🛒 {store_name}")
     
@@ -441,6 +482,13 @@ def build_store_tab(store_name):
         with gr.Column(scale=1):
             gr.Markdown("### 🛒 Shopping List")
             
+            # Category filter for shopping list
+            shopping_list_category_filter = gr.Dropdown(
+                choices=["All Categories"] + get_categories(store_name),
+                value="All Categories",
+                label="Filter by Category"
+            )
+            
             shopping_list_table = gr.DataFrame(
                 value=lambda: get_shopping_list_by_store(store_name)[["name", "price", "quantity", "total"]] if not get_shopping_list_by_store(store_name).empty else pd.DataFrame(columns=["name", "price", "quantity", "total"]),
                 headers=["Name", "Price", "Quantity", "Total"],
@@ -461,14 +509,22 @@ def build_store_tab(store_name):
             
             # Update quantity section - simpler dropdown approach
             gr.Markdown("**Update Quantity:**")
+            
+            item_selector_dropdown = gr.Dropdown(
+                label="Select Item to Update or Remove",
+                choices=get_shopping_list_items_for_dropdown(),
+                value=None,
+                interactive=True
+            )
+            
+            # Show selected item
+            selected_list_item_display = gr.Textbox(
+                label="✓ Selected Item",
+                value="No item selected",
+                interactive=False
+            )
+            
             with gr.Row():
-                item_selector_dropdown = gr.Dropdown(
-                    label="Select Item to Update",
-                    choices=get_shopping_list_items_for_dropdown(),
-                    value=None,
-                    scale=3,
-                    interactive=True
-                )
                 update_quantity_dropdown = gr.Dropdown(
                     label="New Quantity",
                     choices=[1, 2, 3, 4, 5],
@@ -487,6 +543,7 @@ def build_store_tab(store_name):
     
     # Hidden states
     selected_catalog_item_ids = gr.State(value=[])  # Changed to list for multi-select
+    selected_list_item_name = gr.State(value=None)  # Store selected shopping list item
     
     # ═══════════════════════════════════════════════════════════════
     # EVENT HANDLERS
@@ -533,6 +590,36 @@ def build_store_tab(store_name):
         fn=filter_catalog,
         inputs=[category_filter, selected_catalog_item_ids],
         outputs=catalog_table
+    )
+    
+    # Filter shopping list by category
+    def filter_shopping_list(category):
+        """Filter shopping list table and update item dropdown by category"""
+        filtered_df = get_filtered_shopping_list(category)
+        dropdown_choices = get_shopping_list_items_for_dropdown(category)
+        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
+        filtered_total = get_filtered_total(category)
+        return filtered_df, dropdown_update, filtered_total, None, "No item selected"
+    
+    shopping_list_category_filter.change(
+        fn=filter_shopping_list,
+        inputs=[shopping_list_category_filter],
+        outputs=[shopping_list_table, item_selector_dropdown, list_total, selected_list_item_name, selected_list_item_display]
+    )
+    
+    # Handle item selection from dropdown
+    def on_list_item_selected(selected_item):
+        """Update display when an item is selected from dropdown"""
+        if selected_item and selected_item != "None":
+            display_text = f"✓ Selected: {selected_item}"
+            return selected_item, display_text
+        else:
+            return None, "No item selected"
+    
+    item_selector_dropdown.change(
+        fn=on_list_item_selected,
+        inputs=[item_selector_dropdown],
+        outputs=[selected_list_item_name, selected_list_item_display]
     )
     
     # Select item from catalog (multi-select with toggle)
@@ -605,7 +692,7 @@ def build_store_tab(store_name):
     )
     
     # Add to List button - adds all selected items (quantity 1 each)
-    def add_to_list_handler(item_ids, current_filter):
+    def add_to_list_handler(item_ids, current_filter, list_category_filter):
         if not item_ids or len(item_ids) == 0:
             return "❌ Please select at least one item from the catalog first", None, None, [], "No items selected", None
         
@@ -627,30 +714,37 @@ def build_store_tab(store_name):
         else:
             success_msg = f"✅ Added {len(added_items)} items to list: " + ", ".join(added_items)
         
-        # Get updated shopping list
-        df = get_shopping_list_by_store(store_name)
-        df_display = df[["name", "price", "quantity", "total"]] if not df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
+        # Get updated shopping list (filtered by category)
+        df_display = get_filtered_shopping_list(list_category_filter)
         
-        # Get updated dropdown choices and reset value
-        dropdown_choices = get_shopping_list_items_for_dropdown()
+        # Get updated dropdown choices (filtered by category) and reset value
+        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
         dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
         
+        # Get filtered total
+        filtered_total = get_filtered_total(list_category_filter)
+        
         # Clear selections after adding (no need to update catalog table)
-        return success_msg, df_display, get_store_total(store_name), [], "No items selected", dropdown_update
+        return success_msg, df_display, filtered_total, [], "No items selected", dropdown_update
     
     add_to_list_btn.click(
         fn=add_to_list_handler,
-        inputs=[selected_catalog_item_ids, category_filter],
+        inputs=[selected_catalog_item_ids, category_filter, shopping_list_category_filter],
         outputs=[status_message, shopping_list_table, list_total, selected_catalog_item_ids, selected_catalog_items_display, item_selector_dropdown]
     )
     
     # Remove from List button
-    def remove_from_list_handler(selected_item):
-        if not selected_item:
-            return "❌ Please select an item from the dropdown first", None, None, gr.Dropdown(choices=[], value=None)
+    def remove_from_list_handler(selected_item_state, list_category_filter):
+        # Get current state for error returns
+        df_display = get_filtered_shopping_list(list_category_filter)
+        filtered_total = get_filtered_total(list_category_filter)
+        
+        # Check if item is selected
+        if not selected_item_state or selected_item_state == "None":
+            return "❌ Please select an item from the dropdown first", df_display, filtered_total, gr.Dropdown(choices=get_shopping_list_items_for_dropdown(list_category_filter), value=None), None, "No item selected"
         
         # Extract item name from dropdown selection (format: "Item Name (qty: X)")
-        item_name = selected_item.split(" (qty:")[0].strip()
+        item_name = selected_item_state.split(" (qty:")[0].strip()
         
         # Find item ID by name
         item_id = None
@@ -660,44 +754,46 @@ def build_store_tab(store_name):
                 break
         
         if not item_id:
-            return "❌ Item not found", None, None, gr.Dropdown(choices=[], value=None)
+            return "❌ Item not found", df_display, filtered_total, gr.Dropdown(choices=get_shopping_list_items_for_dropdown(list_category_filter), value=None), None, "No item selected"
         
         msg = remove_from_cart(item_id)[0]
-        df = get_shopping_list_by_store(store_name)
-        df_display = df[["name", "price", "quantity", "total"]] if not df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
         
-        # Get updated dropdown choices and reset value
-        dropdown_choices = get_shopping_list_items_for_dropdown()
+        # Get updated shopping list (filtered by category)
+        df_display = get_filtered_shopping_list(list_category_filter)
+        
+        # Get updated dropdown choices (filtered by category) and reset value
+        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
         dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
         
-        return msg, df_display, get_store_total(store_name), dropdown_update
+        # Get filtered total
+        filtered_total = get_filtered_total(list_category_filter)
+        
+        # Clear selection
+        return msg, df_display, filtered_total, dropdown_update, None, "No item selected"
     
     remove_from_list_btn.click(
         fn=remove_from_list_handler,
-        inputs=[item_selector_dropdown],
-        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown]
+        inputs=[selected_list_item_name, shopping_list_category_filter],
+        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display]
     )
     
     # Update quantity for selected item
-    def update_quantity_handler(selected_item, new_qty):
-        # Get current shopping list to avoid clearing it on error
-        df = get_shopping_list_by_store(store_name)
-        if not df.empty and "name" in df.columns:
-            df_display = df[["name", "price", "quantity", "total"]]
-        else:
-            df_display = pd.DataFrame(columns=["name", "price", "quantity", "total"])
+    def update_quantity_handler(selected_item_state, new_qty, list_category_filter):
+        # Get current shopping list to avoid clearing it on error (filtered by category)
+        df_display = get_filtered_shopping_list(list_category_filter)
         
-        current_total = get_store_total(store_name)
-        dropdown_choices = get_shopping_list_items_for_dropdown()
+        filtered_total = get_filtered_total(list_category_filter)
+        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
         
-        if not selected_item:
-            return "❌ Please select an item from the dropdown first", df_display, current_total, gr.Dropdown(choices=dropdown_choices, value=None)
+        # Check if item is selected
+        if not selected_item_state or selected_item_state == "None":
+            return "❌ Please select an item from the dropdown first", df_display, filtered_total, gr.Dropdown(choices=dropdown_choices, value=None), None, "No item selected"
         
         if new_qty < 1:
-            return "❌ Quantity must be at least 1", df_display, current_total, gr.Dropdown(choices=dropdown_choices, value=None)
+            return "❌ Quantity must be at least 1", df_display, filtered_total, gr.Dropdown(choices=dropdown_choices, value=None), selected_item_state, f"✓ Selected: {selected_item_state}"
         
         # Extract item name from dropdown selection (format: "Item Name (qty: X)")
-        item_name = selected_item.split(" (qty:")[0].strip()
+        item_name = selected_item_state.split(" (qty:")[0].strip()
         
         # Find item ID by name
         item_id = None
@@ -707,31 +803,30 @@ def build_store_tab(store_name):
                 break
         
         if not item_id:
-            return "❌ Item not found", df_display, current_total, gr.Dropdown(choices=dropdown_choices, value=None)
+            return "❌ Item not found", df_display, filtered_total, gr.Dropdown(choices=dropdown_choices, value=None), None, "No item selected"
         
         # Update the quantity
         msg = update_item_quantity(item_id, int(new_qty))
         
-        # Refresh shopping list after update
-        df = get_shopping_list_by_store(store_name)
-        if not df.empty and "name" in df.columns:
-            df_display = df[["name", "price", "quantity", "total"]]
-        else:
-            df_display = pd.DataFrame(columns=["name", "price", "quantity", "total"])
+        # Refresh shopping list after update (filtered by category)
+        df_display = get_filtered_shopping_list(list_category_filter)
         
-        # Get updated dropdown choices (with new quantities) and reset value
-        dropdown_choices = get_shopping_list_items_for_dropdown()
+        # Get updated dropdown choices (with new quantities, filtered by category) and reset value
+        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
         dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
         
-        # After successful update
+        # Get filtered total
+        filtered_total = get_filtered_total(list_category_filter)
+        
+        # After successful update, clear selection
         success_msg = f"✅ Updated {item_name} to quantity {new_qty}"
         
-        return success_msg, df_display, get_store_total(store_name), dropdown_update
+        return success_msg, df_display, filtered_total, dropdown_update, None, "No item selected"
     
     update_quantity_btn.click(
         fn=update_quantity_handler,
-        inputs=[item_selector_dropdown, update_quantity_dropdown],
-        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown]
+        inputs=[selected_list_item_name, update_quantity_dropdown, shopping_list_category_filter],
+        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display]
     )
     
     # Email list
