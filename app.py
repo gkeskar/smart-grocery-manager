@@ -435,7 +435,8 @@ def build_store_tab(store_name):
             category_filter = gr.Dropdown(
                 choices=get_categories(store_name),
                 value="All Categories",
-                label="Filter by Category"
+                label="Filter by Category",
+                interactive=True
             )
             
             # Initialize catalog table with actual data (without checkmarks to prevent flickering)
@@ -471,7 +472,8 @@ def build_store_tab(store_name):
                     label="Category",
                     value=None,
                     scale=1,
-                    allow_custom_value=True  # Allow users to add new categories if needed
+                    allow_custom_value=True,  # Allow users to add new categories if needed
+                    interactive=True
                 )
                 new_item_unit = gr.Textbox(label="Unit", placeholder="lb", scale=1)
             
@@ -492,7 +494,8 @@ def build_store_tab(store_name):
                     label="Category",
                     value=None,
                     scale=1,
-                    allow_custom_value=True
+                    allow_custom_value=True,
+                    interactive=True
                 )
                 edit_item_unit = gr.Textbox(label="Unit", placeholder="lb", scale=1)
             
@@ -508,7 +511,8 @@ def build_store_tab(store_name):
             shopping_list_category_filter = gr.Dropdown(
                 choices=["All Categories"] + get_categories(store_name),
                 value="All Categories",
-                label="Filter by Category"
+                label="Filter by Category",
+                interactive=True
             )
             
             shopping_list_table = gr.DataFrame(
