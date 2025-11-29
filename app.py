@@ -386,7 +386,10 @@ def build_store_tab(store_name):
         
         if not store_items:
             return []
-        return [f"{item['name']} (qty: {item['quantity']})" for item in store_items]
+        
+        # Sort items alphabetically by name for consistent dropdown display
+        store_items_sorted = sorted(store_items, key=lambda x: x['name'].lower())
+        return [f"{item['name']} (qty: {item['quantity']})" for item in store_items_sorted]
     
     # Helper function to get filtered shopping list
     def get_filtered_shopping_list(category="All Categories"):
@@ -407,6 +410,8 @@ def build_store_tab(store_name):
         # Create DataFrame
         df = pd.DataFrame(store_items)
         df["total"] = df["price"] * df["quantity"]
+        # Sort alphabetically by name for consistent display
+        df = df.sort_values("name").reset_index(drop=True)
         return df[["name", "price", "quantity", "total"]]
     
     # Helper function to get filtered total
@@ -533,11 +538,11 @@ def build_store_tab(store_name):
             # Add button - adds all selected items (qty 1 each)
             add_to_list_btn = gr.Button("➕ Add Selected Items to List", variant="primary", size="lg")
             
-            # Update quantity section - simpler dropdown approach
-            gr.Markdown("**Update Quantity:**")
+            # Update quantity section - tap on table OR use dropdown
+            gr.Markdown("**Update Quantity:** *(tap a row above or use dropdown)*")
             
             item_selector_dropdown = gr.Dropdown(
-                label="Select Item to Update or Remove",
+                label="Select Item (or tap row above 👆)",
                 choices=get_shopping_list_items_for_dropdown(),
                 value=None,
                 interactive=True
@@ -551,10 +556,12 @@ def build_store_tab(store_name):
             )
             
             with gr.Row():
-                update_quantity_dropdown = gr.Dropdown(
+                update_quantity_input = gr.Number(
                     label="New Quantity",
-                    choices=[1, 2, 3, 4, 5],
                     value=1,
+                    minimum=1,
+                    maximum=99,
+                    step=1,
                     scale=2,
                     interactive=True
                 )
@@ -646,6 +653,35 @@ def build_store_tab(store_name):
         fn=on_list_item_selected,
         inputs=[item_selector_dropdown],
         outputs=[selected_list_item_name, selected_list_item_display]
+    )
+    
+    # Select item from shopping list table by clicking (mobile-friendly!)
+    def select_shopping_list_item(evt: gr.SelectData, list_category_filter):
+        """Select an item from shopping list by clicking on the row - works great on mobile!"""
+        # Get current filtered shopping list
+        df = get_filtered_shopping_list(list_category_filter)
+        
+        if df.empty or evt.index[0] >= len(df):
+            return None, "No item selected", gr.Dropdown(choices=get_shopping_list_items_for_dropdown(list_category_filter), value=None), "❌ Could not select item"
+        
+        # Get the item name from the clicked row
+        item_name = df.iloc[evt.index[0]]["name"]
+        item_qty = int(df.iloc[evt.index[0]]["quantity"])
+        
+        # Create the dropdown value format
+        dropdown_value = f"{item_name} (qty: {item_qty})"
+        display_text = f"✓ Selected: {dropdown_value}"
+        
+        # Get dropdown choices and set the selected value
+        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
+        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=dropdown_value)
+        
+        return dropdown_value, display_text, dropdown_update, f"📱 Tapped: {item_name}"
+    
+    shopping_list_table.select(
+        fn=select_shopping_list_item,
+        inputs=[shopping_list_category_filter],
+        outputs=[selected_list_item_name, selected_list_item_display, item_selector_dropdown, status_message]
     )
     
     # Select item from catalog (multi-select with toggle)
@@ -851,7 +887,7 @@ def build_store_tab(store_name):
     
     update_quantity_btn.click(
         fn=update_quantity_handler,
-        inputs=[selected_list_item_name, update_quantity_dropdown, shopping_list_category_filter],
+        inputs=[selected_list_item_name, update_quantity_input, shopping_list_category_filter],
         outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display]
     )
     

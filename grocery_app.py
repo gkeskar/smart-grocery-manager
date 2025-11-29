@@ -1,9 +1,26 @@
 import json
 import os
+import threading
+from datetime import datetime
+
+# HuggingFace Hub imports
+try:
+    from huggingface_hub import HfApi, hf_hub_download
+    HF_HUB_AVAILABLE = True
+except ImportError:
+    HF_HUB_AVAILABLE = False
+    print("Warning: huggingface_hub not installed. Data will only be saved locally.")
+    print("To enable cloud persistence: pip install huggingface_hub")
+
 
 class GroceryManager:
     def __init__(self):
+        # HuggingFace Hub configuration
+        self.hf_repo = "gandhalikeskar/grocery-catalog"  # Your HF Dataset repo
         self.catalog_file = "grocery_catalog.json"
+        self.hf_token = os.getenv("HF_TOKEN")
+        
+        # Data storage
         self.stores = {}
         self.shopping_list = []
         self.budget = 650.0  # Default total budget
@@ -13,7 +30,182 @@ class GroceryManager:
             "Costco": 300.0           # Monthly
         }
         self.email_address = "gandhali.aradhye@gmail.com"  # Default email
-        self._load_or_initialize_catalog()
+        
+        # Debouncing for saves (avoid too many API calls)
+        self._save_pending = False
+        self._save_timer = None
+        self._save_delay = 3.0  # Wait 3 seconds before saving
+        
+        # Load data
+        self._load_data()
+
+    def _load_data(self):
+        """Load data from HuggingFace Hub, fallback to local file"""
+        # Try loading from HuggingFace Hub first
+        if HF_HUB_AVAILABLE and self.hf_token:
+            if self._load_from_hub():
+                return
+        
+        # Fallback to local file
+        self._load_or_initialize_local()
+
+    def _load_from_hub(self):
+        """Load catalog from HuggingFace Hub"""
+        try:
+            print(f"🔄 Loading data from HuggingFace Hub ({self.hf_repo})...")
+            
+            # Download file from Hub
+            path = hf_hub_download(
+                repo_id=self.hf_repo,
+                filename=self.catalog_file,
+                repo_type="dataset",
+                token=self.hf_token
+            )
+            
+            # Parse JSON
+            with open(path, 'r') as f:
+                data = json.load(f)
+                self.stores = data.get('stores', {})
+                self.shopping_list = data.get('shopping_list', [])
+                self.budget = data.get('budget', 650.0)
+                self.store_budgets = data.get('store_budgets', self.store_budgets)
+                self.email_address = data.get('email_address', self.email_address)
+            
+            print(f"✅ Data loaded from HuggingFace Hub!")
+            print(f"   📦 Stores: {len(self.stores)}")
+            print(f"   🛒 Shopping list items: {len(self.shopping_list)}")
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ Could not load from Hub: {e}")
+            return False
+
+    def _save_to_hub(self):
+        """Save catalog to HuggingFace Hub"""
+        if not HF_HUB_AVAILABLE:
+            print("⚠️ HuggingFace Hub not available, saving locally only")
+            self._save_local()
+            return False
+            
+        if not self.hf_token:
+            print("⚠️ HF_TOKEN not set, saving locally only")
+            self._save_local()
+            return False
+        
+        try:
+            # Prepare data
+            data = {
+                'stores': self.stores,
+                'shopping_list': self.shopping_list,
+                'budget': self.budget,
+                'store_budgets': self.store_budgets,
+                'email_address': self.email_address,
+                'last_updated': datetime.now().isoformat()
+            }
+            
+            # Save locally first (as backup)
+            with open(self.catalog_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            # Upload to Hub
+            api = HfApi()
+            api.upload_file(
+                path_or_fileobj=self.catalog_file,
+                path_in_repo=self.catalog_file,
+                repo_id=self.hf_repo,
+                repo_type="dataset",
+                token=self.hf_token,
+                commit_message=f"Auto-save: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            print(f"✅ Data saved to HuggingFace Hub!")
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ Could not save to Hub: {e}")
+            print("   Saving locally as fallback...")
+            self._save_local()
+            return False
+
+    def _schedule_save(self):
+        """Schedule a save to Hub (debounced to avoid too many API calls)"""
+        # Cancel any pending save
+        if self._save_timer:
+            self._save_timer.cancel()
+        
+        self._save_pending = True
+        
+        # Schedule new save after delay
+        self._save_timer = threading.Timer(self._save_delay, self._do_save)
+        self._save_timer.daemon = True  # Don't block app shutdown
+        self._save_timer.start()
+
+    def _do_save(self):
+        """Actually perform the save"""
+        if self._save_pending:
+            self._save_to_hub()
+            self._save_pending = False
+
+    def force_save(self):
+        """Force immediate save (call on app shutdown or important changes)"""
+        if self._save_timer:
+            self._save_timer.cancel()
+        self._save_pending = True
+        self._do_save()
+
+    # ============================================
+    # LOCAL FILE METHODS (Fallback)
+    # ============================================
+
+    def _load_or_initialize_local(self):
+        """Load catalog from local JSON file or initialize with sample data"""
+        if os.path.exists(self.catalog_file):
+            try:
+                with open(self.catalog_file, 'r') as f:
+                    data = json.load(f)
+                    # Handle both old format (just stores) and new format (full data)
+                    if 'stores' in data:
+                        self.stores = data.get('stores', {})
+                        self.shopping_list = data.get('shopping_list', [])
+                        self.budget = data.get('budget', 650.0)
+                        self.store_budgets = data.get('store_budgets', self.store_budgets)
+                        self.email_address = data.get('email_address', self.email_address)
+                    else:
+                        # Old format - just stores dict
+                        self.stores = data
+                print(f"✅ Catalog loaded from local file: {self.catalog_file}")
+            except Exception as e:
+                print(f"⚠️ Could not load catalog file: {e}")
+                print("   Initializing with default sample data...")
+                self._initialize_sample_data()
+        else:
+            print(f"📦 No catalog file found. Creating new catalog...")
+            self._initialize_sample_data()
+            self._save_to_hub()  # Save initial data to Hub
+
+    def _save_local(self):
+        """Save catalog to local JSON file only"""
+        try:
+            data = {
+                'stores': self.stores,
+                'shopping_list': self.shopping_list,
+                'budget': self.budget,
+                'store_budgets': self.store_budgets,
+                'email_address': self.email_address,
+                'last_updated': datetime.now().isoformat()
+            }
+            with open(self.catalog_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            print(f"✅ Catalog saved locally to {self.catalog_file}")
+        except Exception as e:
+            print(f"⚠️ Could not save catalog locally: {e}")
+
+    def _save_catalog(self):
+        """Save catalog - schedules a Hub save (debounced)"""
+        self._schedule_save()
+
+    # ============================================
+    # SAMPLE DATA INITIALIZATION
+    # ============================================
 
     def _initialize_sample_data(self):
         """Initialize sample data for all stores"""
@@ -173,31 +365,10 @@ class GroceryManager:
         self.stores["Trader Joe's"] = trader_joes_items
         self.stores["Safeway"] = safeway_items
         self.stores["Costco"] = costco_items
-    
-    def _load_or_initialize_catalog(self):
-        """Load catalog from JSON file or initialize with sample data"""
-        if os.path.exists(self.catalog_file):
-            try:
-                with open(self.catalog_file, 'r') as f:
-                    self.stores = json.load(f)
-                print(f"✓ Catalog loaded from {self.catalog_file}")
-            except Exception as e:
-                print(f"Warning: Could not load catalog file: {e}")
-                print("Initializing with default sample data...")
-                self._initialize_sample_data()
-        else:
-            print(f"No catalog file found. Creating new catalog at {self.catalog_file}")
-            self._initialize_sample_data()
-            self._save_catalog()
-    
-    def _save_catalog(self):
-        """Save catalog to JSON file"""
-        try:
-            with open(self.catalog_file, 'w') as f:
-                json.dump(self.stores, f, indent=2)
-            print(f"✓ Catalog saved to {self.catalog_file}")
-        except Exception as e:
-            print(f"Warning: Could not save catalog: {e}")
+
+    # ============================================
+    # PUBLIC API METHODS
+    # ============================================
     
     def get_store_items(self, store_name):
         """Get all items for a specific store"""
@@ -213,23 +384,27 @@ class GroceryManager:
                     for list_item in self.shopping_list:
                         if list_item['id'] == item_id:
                             list_item['quantity'] += quantity
+                            self._schedule_save()  # Auto-save!
                             return True
                     # Add new item to shopping list
                     list_item = item.copy()
                     list_item['quantity'] = quantity
                     self.shopping_list.append(list_item)
+                    self._schedule_save()  # Auto-save!
                     return True
         return False
     
     def remove_from_shopping_list(self, item_id):
         """Remove an item from the shopping list"""
         self.shopping_list = [item for item in self.shopping_list if item['id'] != item_id]
+        self._schedule_save()  # Auto-save!
     
     def update_quantity(self, item_id, quantity):
         """Update the quantity of an item in the shopping list"""
         for item in self.shopping_list:
             if item['id'] == item_id:
                 item['quantity'] = quantity
+                self._schedule_save()  # Auto-save!
                 return True
         return False
     
@@ -270,10 +445,12 @@ class GroceryManager:
     def set_budget(self, amount):
         """Set the budget limit"""
         self.budget = float(amount)
+        self._schedule_save()  # Auto-save!
     
     def clear_shopping_list(self):
         """Clear all items from the shopping list"""
         self.shopping_list = []
+        self._schedule_save()  # Auto-save!
     
     def get_items_by_category(self, store_name, category):
         """Get items filtered by category"""
@@ -298,7 +475,7 @@ class GroceryManager:
                     if unit is not None:
                         item['unit'] = unit
                     
-                    # Save to JSON
-                    self._save_catalog()
+                    # Auto-save to Hub
+                    self._schedule_save()
                     return True
         return False
