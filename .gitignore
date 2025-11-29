@@ -1,12 +1,29 @@
+# Catalog file with user data - do not commit
+grocery_catalog.json
+
+# Database files (for future SQLite migration)
+grocery.db
+grocery.db-journal
+grocery.db-shm
+grocery.db-wal
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-.Python
-.env
-.venv
-env/
-venv/
-*.log
-.DS_Store
 
+# Logs
+*.log
+app.log
+
+# Backups
+*.backup
+*.bak
+grocery_backup_*.json
+
+# Environment variables
+.env
+
+
+grocery_catalog.json
+grocery_catalog.json
