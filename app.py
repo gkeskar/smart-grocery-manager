@@ -687,21 +687,15 @@ def build_store_tab(store_name):
     def filter_catalog(cat, search_term, selected_ids):
         """Filter catalog by category AND search term"""
         df = get_store_items(store_name, cat)
+        df = df[["name", "category", "price", "unit"]].copy()
         
         # Apply search filter if search term provided
         if search_term and search_term.strip():
             search_lower = search_term.strip().lower()
             # Search in name and category columns
-            df_full = df[["name", "category", "price", "unit"]].copy()
-            mask = df_full["name"].str.lower().str.contains(search_lower, na=False) | \
-                   df_full["category"].str.lower().str.contains(search_lower, na=False)
+            mask = df["name"].str.lower().str.contains(search_lower, na=False) | \
+                   df["category"].str.lower().str.contains(search_lower, na=False)
             df = df[mask]
-        
-        # If specific category selected, hide category column (redundant)
-        if cat and cat != "All Categories":
-            df = df[["name", "price", "unit"]].copy()
-        else:
-            df = df[["name", "category", "price", "unit"]].copy()
         
         return df
     
@@ -1266,7 +1260,7 @@ footer {visibility: hidden}
     }
 }
 
-/* Enable scrolling on tables */
+/* Enable horizontal scrolling on tables */
 .dataframe-container, .gradio-dataframe {
     overflow-x: auto !important;
     overflow-y: auto !important;
