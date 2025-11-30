@@ -460,7 +460,7 @@ class GroceryManager:
         return [item for item in items if item['category'] == category]
     
     def update_catalog_item(self, item_id, name=None, category=None, price=None, unit=None):
-        """Update an existing catalog item"""
+        """Update an existing catalog item and sync shopping list items"""
         # Find the item in all stores
         for store_name, items in self.stores.items():
             for item in items:
@@ -474,6 +474,18 @@ class GroceryManager:
                         item['price'] = float(price)
                     if unit is not None:
                         item['unit'] = unit
+                    
+                    # ALSO update any matching items in shopping list
+                    for list_item in self.shopping_list:
+                        if list_item['id'] == item_id:
+                            if name is not None:
+                                list_item['name'] = name
+                            if category is not None:
+                                list_item['category'] = category
+                            if price is not None:
+                                list_item['price'] = float(price)
+                            if unit is not None:
+                                list_item['unit'] = unit
                     
                     # Auto-save to Hub
                     self._schedule_save()
