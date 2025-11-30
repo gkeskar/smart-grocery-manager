@@ -410,9 +410,31 @@ def build_store_tab(store_name):
         # Create DataFrame
         df = pd.DataFrame(store_items)
         df["total"] = df["price"] * df["quantity"]
-        # Sort alphabetically by name for consistent display
-        df = df.sort_values("name").reset_index(drop=True)
         return df[["name", "price", "quantity", "total"]]
+    
+    # Helper function to sort shopping list
+    def sort_shopping_list(df, sort_by="Name (A-Z)"):
+        """Sort shopping list DataFrame by selected option"""
+        if df.empty:
+            return df
+        
+        if sort_by == "Name (A-Z)":
+            df = df.sort_values("name", ascending=True)
+        elif sort_by == "Name (Z-A)":
+            df = df.sort_values("name", ascending=False)
+        elif sort_by == "Price (Low-High)":
+            df = df.sort_values("price", ascending=True)
+        elif sort_by == "Price (High-Low)":
+            df = df.sort_values("price", ascending=False)
+        elif sort_by == "Total (Low-High)":
+            df = df.sort_values("total", ascending=True)
+        elif sort_by == "Total (High-Low)":
+            df = df.sort_values("total", ascending=False)
+        elif sort_by == "Quantity":
+            df = df.sort_values("quantity", ascending=False)
+        # "Custom" = no sorting, keep original order
+        
+        return df.reset_index(drop=True)
     
     # Helper function to get filtered total
     def get_filtered_total(category="All Categories"):
@@ -459,6 +481,13 @@ def build_store_tab(store_name):
         with gr.Column(scale=1):
             gr.Markdown("### 📋 Catalog")
             
+            # Search box for quick item lookup
+            catalog_search = gr.Textbox(
+                label="🔍 Search Catalog",
+                placeholder="Type to filter (e.g., 'banana', 'dairy')",
+                interactive=True
+            )
+            
             category_filter = gr.Radio(
                 choices=get_categories(store_name),
                 value="All Categories",
@@ -502,13 +531,23 @@ def build_store_tab(store_name):
                 show_label=False
             )
             
-            # Category filter for shopping list (Radio for mobile-friendly)
-            shopping_list_category_filter = gr.Radio(
-                choices=get_categories(store_name),
-                value="All Categories",
-                label="Filter Shopping List",
-                interactive=True
-            )
+            # Category filter and sort options in a row
+            with gr.Row():
+                shopping_list_category_filter = gr.Radio(
+                    choices=get_categories(store_name),
+                    value="All Categories",
+                    label="Filter by Category",
+                    interactive=True,
+                    scale=2
+                )
+                shopping_list_sort = gr.Dropdown(
+                    choices=["Name (A-Z)", "Name (Z-A)", "Price (Low-High)", "Price (High-Low)", 
+                             "Total (Low-High)", "Total (High-Low)", "Quantity", "Custom"],
+                    value="Name (A-Z)",
+                    label="Sort By",
+                    interactive=True,
+                    scale=1
+                )
             
             shopping_list_table = gr.DataFrame(
                 value=lambda: get_shopping_list_by_store(store_name)[["name", "price", "quantity", "total"]] if not get_shopping_list_by_store(store_name).empty else pd.DataFrame(columns=["name", "price", "quantity", "total"]),
@@ -647,31 +686,57 @@ def build_store_tab(store_name):
         return df
     
     # Filter catalog by category
-    def filter_catalog(cat, selected_ids):
+    def filter_catalog(cat, search_term, selected_ids):
+        """Filter catalog by category AND search term"""
         df = get_store_items(store_name, cat)
         df = df[["name", "category", "price", "unit"]].copy()
-        # No checkmarks to prevent UI flickering - use selected items display instead
+        
+        # Apply search filter if search term provided
+        if search_term and search_term.strip():
+            search_lower = search_term.strip().lower()
+            # Search in name and category columns
+            mask = df["name"].str.lower().str.contains(search_lower, na=False) | \
+                   df["category"].str.lower().str.contains(search_lower, na=False)
+            df = df[mask]
+        
         return df
     
+    # Category filter triggers catalog refresh
     category_filter.change(
         fn=filter_catalog,
-        inputs=[category_filter, selected_catalog_item_ids],
+        inputs=[category_filter, catalog_search, selected_catalog_item_ids],
+        outputs=catalog_table
+    )
+    
+    # Search box triggers catalog refresh
+    catalog_search.change(
+        fn=filter_catalog,
+        inputs=[category_filter, catalog_search, selected_catalog_item_ids],
         outputs=catalog_table
     )
     
     # Filter shopping list by category
-    def filter_shopping_list(category):
-        """Filter shopping list table and update item dropdown by category"""
+    def filter_shopping_list(category, sort_by):
+        """Filter and sort shopping list table"""
         filtered_df = get_filtered_shopping_list(category)
+        sorted_df = sort_shopping_list(filtered_df, sort_by)
         dropdown_choices = get_shopping_list_items_for_dropdown(category)
         dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
         filtered_total = get_filtered_total(category)
-        return filtered_df, dropdown_update, filtered_total, None, "No item selected"
+        return sorted_df, dropdown_update, filtered_total, None, "👆 Tap a row to select", "Qty: -"
     
+    # Category filter triggers refresh
     shopping_list_category_filter.change(
         fn=filter_shopping_list,
-        inputs=[shopping_list_category_filter],
-        outputs=[shopping_list_table, item_selector_dropdown, list_total, selected_list_item_name, selected_list_item_display]
+        inputs=[shopping_list_category_filter, shopping_list_sort],
+        outputs=[shopping_list_table, item_selector_dropdown, list_total, selected_list_item_name, selected_list_item_display, current_qty_display]
+    )
+    
+    # Sort dropdown triggers refresh
+    shopping_list_sort.change(
+        fn=filter_shopping_list,
+        inputs=[shopping_list_category_filter, shopping_list_sort],
+        outputs=[shopping_list_table, item_selector_dropdown, list_total, selected_list_item_name, selected_list_item_display, current_qty_display]
     )
     
     # Handle item selection from dropdown
@@ -796,7 +861,7 @@ def build_store_tab(store_name):
     )
     
     # Add to List button - adds all selected items (quantity 1 each)
-    def add_to_list_handler(item_ids, current_filter, list_category_filter):
+    def add_to_list_handler(item_ids, current_filter, list_category_filter, sort_by):
         if not item_ids or len(item_ids) == 0:
             return "❌ Please select at least one item from the catalog first", None, None, [], "No items selected", None, get_summary_text()
         
@@ -818,8 +883,9 @@ def build_store_tab(store_name):
         else:
             success_msg = f"✅ Added {len(added_items)} items to list: " + ", ".join(added_items)
         
-        # Get updated shopping list (filtered by category)
+        # Get updated shopping list (filtered and sorted)
         df_display = get_filtered_shopping_list(list_category_filter)
+        df_display = sort_shopping_list(df_display, sort_by)
         
         # Get updated dropdown choices (filtered by category) and reset value
         dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
@@ -834,14 +900,15 @@ def build_store_tab(store_name):
     
     add_to_list_btn.click(
         fn=add_to_list_handler,
-        inputs=[selected_catalog_item_ids, category_filter, shopping_list_category_filter],
+        inputs=[selected_catalog_item_ids, category_filter, shopping_list_category_filter, shopping_list_sort],
         outputs=[status_message, shopping_list_table, list_total, selected_catalog_item_ids, selected_catalog_items_display, item_selector_dropdown, summary_display]
     )
     
     # Remove from List button
-    def remove_from_list_handler(selected_item_state, list_category_filter):
+    def remove_from_list_handler(selected_item_state, list_category_filter, sort_by):
         # Get current state for error returns
         df_display = get_filtered_shopping_list(list_category_filter)
+        df_display = sort_shopping_list(df_display, sort_by)
         filtered_total = get_filtered_total(list_category_filter)
         
         # Check if item is selected
@@ -863,8 +930,9 @@ def build_store_tab(store_name):
         
         msg = remove_from_cart(item_id)[0]
         
-        # Get updated shopping list (filtered by category)
+        # Get updated shopping list (filtered and sorted)
         df_display = get_filtered_shopping_list(list_category_filter)
+        df_display = sort_shopping_list(df_display, sort_by)
         
         # Get updated dropdown choices (filtered by category) and reset value
         dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
@@ -878,7 +946,7 @@ def build_store_tab(store_name):
     
     remove_from_list_btn.click(
         fn=remove_from_list_handler,
-        inputs=[selected_list_item_name, shopping_list_category_filter],
+        inputs=[selected_list_item_name, shopping_list_category_filter, shopping_list_sort],
         outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display, summary_display]
     )
     
@@ -938,7 +1006,7 @@ def build_store_tab(store_name):
     # QUICK +/- QUANTITY BUTTONS
     # ═══════════════════════════════════════════════════════════════
     
-    def increase_quantity(selected_item_state, list_category_filter):
+    def increase_quantity(selected_item_state, list_category_filter, sort_by):
         """Increment quantity by 1"""
         if not selected_item_state or selected_item_state == "None":
             return "❌ Select an item first", None, None, None, None, "👆 Tap a row", "Qty: -", get_summary_text()
@@ -962,8 +1030,9 @@ def build_store_tab(store_name):
         new_qty = current_qty + 1
         update_item_quantity(item_id, new_qty)
         
-        # Refresh displays
+        # Refresh displays (with sort)
         df_display = get_filtered_shopping_list(list_category_filter)
+        df_display = sort_shopping_list(df_display, sort_by)
         filtered_total = get_filtered_total(list_category_filter)
         dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
         new_dropdown_value = f"{item_name} (qty: {new_qty})"
@@ -971,7 +1040,7 @@ def build_store_tab(store_name):
         
         return f"✅ {item_name}: {current_qty} → {new_qty}", df_display, filtered_total, dropdown_update, new_dropdown_value, f"✅ {item_name}", f"Qty: {new_qty}", get_summary_text()
     
-    def decrease_quantity(selected_item_state, list_category_filter):
+    def decrease_quantity(selected_item_state, list_category_filter, sort_by):
         """Decrement quantity by 1 (minimum 1)"""
         if not selected_item_state or selected_item_state == "None":
             return "❌ Select an item first", None, None, None, None, "👆 Tap a row", "Qty: -", get_summary_text()
@@ -998,8 +1067,9 @@ def build_store_tab(store_name):
         new_qty = current_qty - 1
         update_item_quantity(item_id, new_qty)
         
-        # Refresh displays
+        # Refresh displays (with sort)
         df_display = get_filtered_shopping_list(list_category_filter)
+        df_display = sort_shopping_list(df_display, sort_by)
         filtered_total = get_filtered_total(list_category_filter)
         dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
         new_dropdown_value = f"{item_name} (qty: {new_qty})"
@@ -1009,13 +1079,13 @@ def build_store_tab(store_name):
     
     increase_qty_btn.click(
         fn=increase_quantity,
-        inputs=[selected_list_item_name, shopping_list_category_filter],
+        inputs=[selected_list_item_name, shopping_list_category_filter, shopping_list_sort],
         outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display, current_qty_display, summary_display]
     )
     
     decrease_qty_btn.click(
         fn=decrease_quantity,
-        inputs=[selected_list_item_name, shopping_list_category_filter],
+        inputs=[selected_list_item_name, shopping_list_category_filter, shopping_list_sort],
         outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display, current_qty_display, summary_display]
     )
     
@@ -1135,6 +1205,63 @@ MOBILE_CSS = """
 /* Hide footer */
 footer {visibility: hidden}
 
+/* ═══════════════════════════════════════════════════════════════
+   DARK MODE SUPPORT - Follows system preference
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Dark mode colors */
+@media (prefers-color-scheme: dark) {
+    .gradio-container {
+        --background-fill-primary: #1a1a2e !important;
+        --background-fill-secondary: #16213e !important;
+        --border-color-primary: #0f3460 !important;
+        --color-accent: #e94560 !important;
+    }
+    
+    /* Dark table styling */
+    .dataframe-container table {
+        background-color: #16213e !important;
+        color: #eee !important;
+    }
+    
+    .dataframe-container table th {
+        background-color: #0f3460 !important;
+        color: #fff !important;
+    }
+    
+    .dataframe-container table tr:nth-child(even) {
+        background-color: #1a1a2e !important;
+    }
+    
+    .dataframe-container table tr:hover {
+        background-color: #0f3460 !important;
+    }
+    
+    /* Dark mode text */
+    .prose, .markdown-text, p, span, label {
+        color: #eee !important;
+    }
+    
+    /* Dark mode inputs */
+    input, textarea, select {
+        background-color: #16213e !important;
+        color: #eee !important;
+        border-color: #0f3460 !important;
+    }
+    
+    /* Dark mode buttons */
+    button.secondary {
+        background-color: #0f3460 !important;
+        color: #eee !important;
+    }
+    
+    /* Accordion headers */
+    .accordion > button {
+        background-color: #1a1a2e !important;
+        color: #eee !important;
+    }
+}
+
 /* Enable horizontal scrolling on tables */
 .dataframe-container, .gradio-dataframe {
     overflow-x: auto !important;
@@ -1214,8 +1341,9 @@ input[type="number"] {
 """
 
 # Create the Gradio interface
-with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS) as demo:
+with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.Soft()) as demo:
     gr.Markdown("# 🛒 Smart Grocery Manager")
+    gr.Markdown("*💡 Tip: Dark mode follows your system settings, or use your browser's dark mode*")
     
     with gr.Tabs() as tabs:
         # Trader Joe's Tab
