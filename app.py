@@ -459,6 +459,13 @@ def build_store_tab(store_name):
         with gr.Column(scale=1):
             gr.Markdown("### 📋 Catalog")
             
+            # Search box for quick item lookup
+            catalog_search = gr.Textbox(
+                label="🔍 Search Catalog",
+                placeholder="Type to filter (e.g., 'banana', 'dairy')",
+                interactive=True
+            )
+            
             category_filter = gr.Radio(
                 choices=get_categories(store_name),
                 value="All Categories",
@@ -647,15 +654,32 @@ def build_store_tab(store_name):
         return df
     
     # Filter catalog by category
-    def filter_catalog(cat, selected_ids):
+    def filter_catalog(cat, search_term, selected_ids):
+        """Filter catalog by category AND search term"""
         df = get_store_items(store_name, cat)
         df = df[["name", "category", "price", "unit"]].copy()
-        # No checkmarks to prevent UI flickering - use selected items display instead
+        
+        # Apply search filter if search term provided
+        if search_term and search_term.strip():
+            search_lower = search_term.strip().lower()
+            # Search in name and category columns
+            mask = df["name"].str.lower().str.contains(search_lower, na=False) | \
+                   df["category"].str.lower().str.contains(search_lower, na=False)
+            df = df[mask]
+        
         return df
     
+    # Category filter triggers catalog refresh
     category_filter.change(
         fn=filter_catalog,
-        inputs=[category_filter, selected_catalog_item_ids],
+        inputs=[category_filter, catalog_search, selected_catalog_item_ids],
+        outputs=catalog_table
+    )
+    
+    # Search box triggers catalog refresh
+    catalog_search.change(
+        fn=filter_catalog,
+        inputs=[category_filter, catalog_search, selected_catalog_item_ids],
         outputs=catalog_table
     )
     
@@ -1135,6 +1159,63 @@ MOBILE_CSS = """
 /* Hide footer */
 footer {visibility: hidden}
 
+/* ═══════════════════════════════════════════════════════════════
+   DARK MODE SUPPORT - Follows system preference
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Dark mode colors */
+@media (prefers-color-scheme: dark) {
+    .gradio-container {
+        --background-fill-primary: #1a1a2e !important;
+        --background-fill-secondary: #16213e !important;
+        --border-color-primary: #0f3460 !important;
+        --color-accent: #e94560 !important;
+    }
+    
+    /* Dark table styling */
+    .dataframe-container table {
+        background-color: #16213e !important;
+        color: #eee !important;
+    }
+    
+    .dataframe-container table th {
+        background-color: #0f3460 !important;
+        color: #fff !important;
+    }
+    
+    .dataframe-container table tr:nth-child(even) {
+        background-color: #1a1a2e !important;
+    }
+    
+    .dataframe-container table tr:hover {
+        background-color: #0f3460 !important;
+    }
+    
+    /* Dark mode text */
+    .prose, .markdown-text, p, span, label {
+        color: #eee !important;
+    }
+    
+    /* Dark mode inputs */
+    input, textarea, select {
+        background-color: #16213e !important;
+        color: #eee !important;
+        border-color: #0f3460 !important;
+    }
+    
+    /* Dark mode buttons */
+    button.secondary {
+        background-color: #0f3460 !important;
+        color: #eee !important;
+    }
+    
+    /* Accordion headers */
+    .accordion > button {
+        background-color: #1a1a2e !important;
+        color: #eee !important;
+    }
+}
+
 /* Enable horizontal scrolling on tables */
 .dataframe-container, .gradio-dataframe {
     overflow-x: auto !important;
@@ -1214,8 +1295,9 @@ input[type="number"] {
 """
 
 # Create the Gradio interface
-with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS) as demo:
+with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.Soft()) as demo:
     gr.Markdown("# 🛒 Smart Grocery Manager")
+    gr.Markdown("*💡 Tip: Dark mode follows your system settings, or use your browser's dark mode*")
     
     with gr.Tabs() as tabs:
         # Trader Joe's Tab
