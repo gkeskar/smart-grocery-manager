@@ -64,7 +64,10 @@ def get_store_items(store_name, category_filter=None):
 def get_categories(store_name):
     """Get unique categories for a store"""
     items = grocery_manager.stores.get(store_name, [])
-    categories = sorted(list(set(item["category"] for item in items)))
+    categories = set(item["category"] for item in items)
+    # Always include Miscellaneous as an option
+    categories.add("Miscellaneous")
+    categories = sorted(list(categories))
     return ["All Categories"] + categories
 
 def add_to_cart(item_id, quantity):
@@ -393,30 +396,30 @@ def build_store_tab(store_name):
     
     # Helper function to get filtered shopping list
     def get_filtered_shopping_list(category="All Categories"):
-        """Returns shopping list dataframe filtered by category"""
+        """Returns shopping list dataframe filtered by category (with all columns for sorting)"""
         # Get shopping list items for this store
         store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
         
         if not store_items:
-            return pd.DataFrame(columns=["name", "price", "quantity", "total"])
+            return pd.DataFrame(columns=["name", "quantity", "price", "total"])
         
         # Filter by category if not "All Categories"
         if category != "All Categories":
             store_items = [item for item in store_items if item.get("category") == category]
         
         if not store_items:
-            return pd.DataFrame(columns=["name", "price", "quantity", "total"])
+            return pd.DataFrame(columns=["name", "quantity", "price", "total"])
         
-        # Create DataFrame
+        # Create DataFrame with all columns (needed for sorting)
         df = pd.DataFrame(store_items)
         df["total"] = df["price"] * df["quantity"]
-        return df[["name", "price", "quantity", "total"]]
+        return df[["name", "quantity", "price", "total"]]
     
     # Helper function to sort shopping list
     def sort_shopping_list(df, sort_by="Name (A-Z)"):
-        """Sort shopping list DataFrame by selected option"""
+        """Sort shopping list DataFrame and return only display columns (name, quantity)"""
         if df.empty:
-            return df
+            return pd.DataFrame(columns=["name", "quantity"])
         
         if sort_by == "Name (A-Z)":
             df = df.sort_values("name", ascending=True)
@@ -434,7 +437,17 @@ def build_store_tab(store_name):
             df = df.sort_values("quantity", ascending=False)
         # "Custom" = no sorting, keep original order
         
-        return df.reset_index(drop=True)
+        # Return only name and quantity for cleaner mobile display
+        result = df[["name", "quantity"]].reset_index(drop=True)
+        
+        # Add 2 empty spacer rows at the end (iOS rubber band fix)
+        spacer_rows = pd.DataFrame([
+            {"name": "", "quantity": ""},
+            {"name": "", "quantity": ""}
+        ])
+        result = pd.concat([result, spacer_rows], ignore_index=True)
+        
+        return result
     
     # Helper function to get filtered total
     def get_filtered_total(category="All Categories"):
@@ -479,8 +492,7 @@ def build_store_tab(store_name):
     with gr.Row():
         # LEFT COLUMN: CATALOG
         with gr.Column(scale=1):
-            gr.Markdown("### 📋 Catalog")
-            
+          with gr.Accordion("📋 Catalog", open=True):
             # Search box for quick item lookup
             catalog_search = gr.Textbox(
                 label="🔍 Search Catalog",
@@ -495,20 +507,39 @@ def build_store_tab(store_name):
                 interactive=True
             )
             
-            # Initialize catalog table with actual data
-            initial_catalog = get_store_items(store_name)[["name", "category", "price", "unit"]].copy()
+            # Helper to get catalog items as checkbox choices
+            def get_catalog_choices(category="All Categories", search_term=""):
+                """Get catalog items as checkbox choices: 'Item Name - $X.XX'"""
+                df = get_store_items(store_name, category)
+                
+                # Apply search filter
+                if search_term and search_term.strip():
+                    search_lower = search_term.strip().lower()
+                    mask = df["name"].str.lower().str.contains(search_lower, na=False) | \
+                           df["category"].str.lower().str.contains(search_lower, na=False)
+                    df = df[mask]
+                
+                # Format as "Item Name - $X.XX (category)"
+                choices = []
+                for _, row in df.iterrows():
+                    if category == "All Categories":
+                        choices.append(f"{row['name']} - ${row['price']:.2f} ({row['category']})")
+                    else:
+                        choices.append(f"{row['name']} - ${row['price']:.2f}")
+                
+                return sorted(choices)
             
-            catalog_table = gr.DataFrame(
-                value=initial_catalog,
-                headers=["Name", "Category", "Price", "Unit"],
-                datatype=["str", "str", "number", "str"],
-                row_count=8,
-                interactive=False
+            # Catalog as checkboxes (mobile-friendly!)
+            catalog_checkboxes = gr.CheckboxGroup(
+                choices=get_catalog_choices(),
+                value=[],
+                label="📦 Catalog Items (tap to select, then Add to List)",
+                interactive=True
             )
             
-            # Selected items display (for multi-select)
+            # Selected items display
             selected_catalog_items_display = gr.Textbox(
-                label="✓ Selected Items",
+                label="✓ Selected",
                 value="No items selected",
                 interactive=False
             )
@@ -520,7 +551,7 @@ def build_store_tab(store_name):
         
         # RIGHT COLUMN: SHOPPING LIST
         with gr.Column(scale=1):
-            gr.Markdown("### 🛒 Shopping List")
+          with gr.Accordion("🛒 Shopping List", open=True):
             
             # Summary bar showing item count and total - styled Textbox updates more reliably than Markdown
             summary_display = gr.Textbox(
@@ -530,75 +561,58 @@ def build_store_tab(store_name):
                 show_label=False
             )
             
-            # Category filter and sort options in a row
-            with gr.Row():
-                shopping_list_category_filter = gr.Radio(
-                    choices=get_categories(store_name),
-                    value="All Categories",
-                    label="Filter by Category",
-                    interactive=True,
-                    scale=2
-                )
-                shopping_list_sort = gr.Dropdown(
-                    choices=["Name (A-Z)", "Name (Z-A)", "Price (Low-High)", "Price (High-Low)", 
-                             "Total (Low-High)", "Total (High-Low)", "Quantity", "Custom"],
-                    value="Name (A-Z)",
-                    label="Sort By",
-                    interactive=True,
-                    scale=1
-                )
+            # Category filter
+            shopping_list_category_filter = gr.Radio(
+                choices=get_categories(store_name),
+                value="All Categories",
+                label="Filter by Category",
+                interactive=True
+            )
             
-            shopping_list_table = gr.DataFrame(
-                value=lambda: get_shopping_list_by_store(store_name)[["name", "price", "quantity", "total"]] if not get_shopping_list_by_store(store_name).empty else pd.DataFrame(columns=["name", "price", "quantity", "total"]),
-                headers=["Name", "Price", "Quantity", "Total"],
-                datatype=["str", "number", "number", "number"],
-                row_count=8,
-                interactive=False
+            # Helper to get shopping list as checkbox choices
+            def get_shopping_list_choices(category="All Categories", sort_by="Name (A-Z)"):
+                """Get shopping list items as checkbox choices: 'Item Name (qty: X)'"""
+                store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
+                
+                if category != "All Categories":
+                    store_items = [item for item in store_items if item.get("category") == category]
+                
+                # Sort items
+                if sort_by == "Name (A-Z)":
+                    store_items = sorted(store_items, key=lambda x: x["name"].lower())
+                elif sort_by == "Name (Z-A)":
+                    store_items = sorted(store_items, key=lambda x: x["name"].lower(), reverse=True)
+                elif sort_by == "Quantity":
+                    store_items = sorted(store_items, key=lambda x: x["quantity"], reverse=True)
+                
+                # Format as "Item Name (qty: X)"
+                return [f"{item['name']} (qty: {item['quantity']})" for item in store_items]
+            
+            # Action buttons at TOP for easy access
+            with gr.Row():
+                decrease_qty_btn = gr.Button("➖", variant="secondary", scale=1, min_width=50)
+                increase_qty_btn = gr.Button("➕", variant="secondary", scale=1, min_width=50)
+                remove_from_list_btn = gr.Button("🗑️", variant="stop", scale=1, min_width=50)
+            
+            # Shopping list as checkboxes (mobile-friendly!)
+            shopping_list_checkboxes = gr.CheckboxGroup(
+                choices=get_shopping_list_choices(),
+                value=[],
+                label="📋 Tap item, then use buttons above",
+                interactive=True
             )
             
             list_total = gr.Textbox(
                 label=f"💰 Total",
-                value=get_filtered_total("All Categories"),  # Initialize with actual total
+                value=get_filtered_total("All Categories"),
                 interactive=False
             )
-            
-            # Quick quantity controls - tap row to select, then use +/- buttons
-            gr.Markdown("**Quick Edit:** *(tap a row above to select)*")
-            
-            # Dropdown as fallback (hidden label for cleaner mobile look)
-            item_selector_dropdown = gr.Dropdown(
-                label="Or select from list",
-                choices=get_shopping_list_items_for_dropdown(),
-                value=None,
-                interactive=True
-            )
-            
-            # Show selected item prominently
-            selected_list_item_display = gr.Textbox(
-                label="Selected Item",
-                value="👆 Tap a row to select",
-                interactive=False
-            )
-            
-            # +/- buttons for quick quantity adjustment
-            with gr.Row():
-                decrease_qty_btn = gr.Button("➖", variant="secondary", scale=1, min_width=60)
-                current_qty_display = gr.Textbox(
-                    value="Qty: -",
-                    label="",
-                    interactive=False,
-                    show_label=False,
-                    scale=1,
-                    min_width=80
-                )
-                increase_qty_btn = gr.Button("➕", variant="secondary", scale=1, min_width=60)
-                remove_from_list_btn = gr.Button("🗑️", variant="stop", scale=1, min_width=60)
             
             # Hidden: keep for compatibility with existing handlers
             update_quantity_input = gr.Number(value=1, visible=False)
             update_quantity_btn = gr.Button("Update", visible=False)
             
-            email_button = gr.Button("📧 Email Shopping List", variant="primary", size="lg")
+            email_button = gr.Button("📧 Email List", variant="primary")
     
     # ═══════════════════════════════════════════════════════════════
     # CATALOG MANAGEMENT - In collapsible accordions (rarely used)
@@ -611,16 +625,12 @@ def build_store_tab(store_name):
         with gr.Row():
             new_item_name = gr.Textbox(label="Name", placeholder="New item name", scale=2)
             new_item_price = gr.Number(label="Price", value=0, minimum=0, step=0.01, scale=1)
-        with gr.Row():
-            new_item_category = gr.Dropdown(
-                choices=[cat for cat in get_categories(store_name) if cat != "All Categories"],
-                label="Category",
-                value=None,
-                scale=1,
-                allow_custom_value=True,
-                interactive=True
-            )
-            new_item_unit = gr.Textbox(label="Unit", placeholder="lb, each, bag...", scale=1)
+        new_item_category = gr.Radio(
+            choices=[cat for cat in get_categories(store_name) if cat != "All Categories"],
+            label="Category (tap to select)",
+            value=None,
+            interactive=True
+        )
         add_catalog_btn = gr.Button("➕ Add to Catalog", variant="primary")
     
     with gr.Accordion("✏️ Edit/Delete Catalog Item", open=False):
@@ -628,41 +638,33 @@ def build_store_tab(store_name):
         with gr.Row():
             edit_item_name = gr.Textbox(label="Name", placeholder="Select item first", scale=2)
             edit_item_price = gr.Number(label="Price", value=0, minimum=0, step=0.01, scale=1)
-        with gr.Row():
-            edit_item_category = gr.Dropdown(
-                choices=[cat for cat in get_categories(store_name) if cat != "All Categories"],
-                label="Category",
-                value=None,
-                scale=1,
-                allow_custom_value=True,
-                interactive=True
-            )
-            edit_item_unit = gr.Textbox(label="Unit", placeholder="lb", scale=1)
+        edit_item_category = gr.Radio(
+            choices=[cat for cat in get_categories(store_name) if cat != "All Categories"],
+            label="Category (tap to select)",
+            value=None,
+            interactive=True
+        )
         with gr.Row():
             update_catalog_btn = gr.Button("💾 Save Changes", variant="primary", scale=1)
             delete_catalog_btn = gr.Button("🗑️ Delete Item", variant="stop", scale=1)
     
     # Status messages
-    status_message = gr.Textbox(label="Status", show_label=False, placeholder="Select items and use buttons")
-    
-    # Hidden states
-    selected_catalog_item_ids = gr.State(value=[])  # Changed to list for multi-select
-    selected_list_item_name = gr.State(value=None)  # Store selected shopping list item
+    status_message = gr.Textbox(label="Status", show_label=False, placeholder="")
     
     # ═══════════════════════════════════════════════════════════════
     # EVENT HANDLERS
     # ═══════════════════════════════════════════════════════════════
     
-    # Helper function to add checkmark column
+    # Helper function for checkmark column (deprecated - using CheckboxGroups now)
     def add_checkmark_column(df, selected_ids):
-        """Add a checkmark column to show selected items"""
+        """Add a checkmark column to show selected items - checkbox style"""
         if df.empty:
             return df
         
         # Get item IDs for the dataframe
         all_items = grocery_manager.stores.get(store_name, [])
         
-        # Create checkmark column
+        # Create checkmark column with checkbox symbols
         checkmarks = []
         for idx, row in df.iterrows():
             item_name = row["name"]
@@ -673,344 +675,177 @@ def build_store_tab(store_name):
                     item_id = item["id"]
                     break
             
-            # Add checkmark if selected
+            # Show checkbox state: ☑ for selected, ☐ for unselected
             if item_id and item_id in (selected_ids or []):
-                checkmarks.append("✓")
+                checkmarks.append("☑")  # Checked box
             else:
-                checkmarks.append("")
+                checkmarks.append("☐")  # Empty box
         
         # Insert checkmark column at the front
-        df.insert(0, "☑", checkmarks)
-        return df
+        result_df = df.copy()
+        result_df.insert(0, "Add", checkmarks)
+        return result_df
     
     # Filter catalog by category
-    def filter_catalog(cat, search_term, selected_ids):
-        """Filter catalog by category AND search term"""
-        df = get_store_items(store_name, cat)
-        df = df[["name", "category", "price", "unit"]].copy()
-        
-        # Apply search filter if search term provided
-        if search_term and search_term.strip():
-            search_lower = search_term.strip().lower()
-            # Search in name and category columns
-            mask = df["name"].str.lower().str.contains(search_lower, na=False) | \
-                   df["category"].str.lower().str.contains(search_lower, na=False)
-            df = df[mask]
-        
-        return df
+    def filter_catalog(cat, search_term):
+        """Filter catalog by category AND search term - returns checkbox choices"""
+        choices = get_catalog_choices(cat, search_term)
+        return gr.CheckboxGroup(choices=choices, value=[])
     
     # Category filter triggers catalog refresh
     category_filter.change(
         fn=filter_catalog,
-        inputs=[category_filter, catalog_search, selected_catalog_item_ids],
-        outputs=catalog_table
+        inputs=[category_filter, catalog_search],
+        outputs=catalog_checkboxes
     )
     
     # Search box triggers catalog refresh
     catalog_search.change(
         fn=filter_catalog,
-        inputs=[category_filter, catalog_search, selected_catalog_item_ids],
-        outputs=catalog_table
+        inputs=[category_filter, catalog_search],
+        outputs=catalog_checkboxes
     )
     
     # Filter shopping list by category
-    def filter_shopping_list(category, sort_by):
-        """Filter and sort shopping list table"""
-        filtered_df = get_filtered_shopping_list(category)
-        sorted_df = sort_shopping_list(filtered_df, sort_by)
-        dropdown_choices = get_shopping_list_items_for_dropdown(category)
-        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
+    def filter_shopping_list(category):
+        """Filter shopping list - returns checkbox choices (sorted by name)"""
+        choices = get_shopping_list_choices(category, "Name (A-Z)")
         filtered_total = get_filtered_total(category)
-        return sorted_df, dropdown_update, filtered_total, None, "👆 Tap a row to select", "Qty: -"
+        return gr.CheckboxGroup(choices=choices, value=[]), filtered_total
     
     # Category filter triggers refresh
     shopping_list_category_filter.change(
         fn=filter_shopping_list,
-        inputs=[shopping_list_category_filter, shopping_list_sort],
-        outputs=[shopping_list_table, item_selector_dropdown, list_total, selected_list_item_name, selected_list_item_display, current_qty_display]
-    )
-    
-    # Sort dropdown triggers refresh
-    shopping_list_sort.change(
-        fn=filter_shopping_list,
-        inputs=[shopping_list_category_filter, shopping_list_sort],
-        outputs=[shopping_list_table, item_selector_dropdown, list_total, selected_list_item_name, selected_list_item_display, current_qty_display]
-    )
-    
-    # Handle item selection from dropdown
-    def on_list_item_selected(selected_item):
-        """Update display when an item is selected from dropdown"""
-        if selected_item and selected_item != "None":
-            # Extract qty from format "Item Name (qty: X)"
-            item_name = selected_item.split(" (qty:")[0].strip()
-            try:
-                qty = int(selected_item.split("(qty: ")[1].rstrip(")"))
-            except:
-                qty = 1
-            display_text = f"✅ {item_name}"
-            qty_display = f"Qty: {qty}"
-            return selected_item, display_text, qty_display
-        else:
-            return None, "👆 Tap a row to select", "Qty: -"
-    
-    item_selector_dropdown.change(
-        fn=on_list_item_selected,
-        inputs=[item_selector_dropdown],
-        outputs=[selected_list_item_name, selected_list_item_display, current_qty_display]
-    )
-    
-    # Select item from shopping list table by clicking (mobile-friendly!)
-    def select_shopping_list_item(evt: gr.SelectData, list_category_filter):
-        """Select an item from shopping list by clicking on the row - works great on mobile!"""
-        # Get current filtered shopping list
-        df = get_filtered_shopping_list(list_category_filter)
-        
-        if df.empty or evt.index[0] >= len(df):
-            return None, "👆 Tap a row to select", gr.Dropdown(choices=get_shopping_list_items_for_dropdown(list_category_filter), value=None), "❌ Could not select item", "Qty: -"
-        
-        # Get the item name from the clicked row
-        item_name = df.iloc[evt.index[0]]["name"]
-        item_qty = int(df.iloc[evt.index[0]]["quantity"])
-        
-        # Create the dropdown value format
-        dropdown_value = f"{item_name} (qty: {item_qty})"
-        display_text = f"✅ {item_name}"
-        qty_display = f"Qty: {item_qty}"
-        
-        # Get dropdown choices and set the selected value
-        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
-        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=dropdown_value)
-        
-        return dropdown_value, display_text, dropdown_update, f"📱 Selected: {item_name}", qty_display
-    
-    shopping_list_table.select(
-        fn=select_shopping_list_item,
         inputs=[shopping_list_category_filter],
-        outputs=[selected_list_item_name, selected_list_item_display, item_selector_dropdown, status_message, current_qty_display]
+        outputs=[shopping_list_checkboxes, list_total]
     )
     
-    # Select item from catalog (multi-select with toggle)
-    def select_catalog_item(evt: gr.SelectData, current_filter, current_selections):
-        all_items = grocery_manager.stores.get(store_name, [])
-        df = get_store_items(store_name, current_filter)
+    # Update display when catalog checkboxes change
+    def on_catalog_selection_change(selected_items):
+        """Update the selected items display when checkboxes change"""
+        if not selected_items or len(selected_items) == 0:
+            return "No items selected", "", "", 0.0, None
         
-        if df.empty or evt.index[0] >= len(df):
-            return current_selections, "❌ Could not select item", "No items selected", "", "", 0, None, ""
+        # Display count
+        if len(selected_items) == 1:
+            display_text = f"✓ {selected_items[0].split(' - ')[0]}"
+        else:
+            display_text = f"✓ {len(selected_items)} items selected"
         
-        item_name = df.iloc[evt.index[0]]["name"]
-        item_id = None
+        # Populate edit fields with the last selected item (for editing)
+        last_item = selected_items[-1]
+        item_name = last_item.split(" - $")[0].strip()
         
-        # Find the item ID
-        for item in all_items:
+        # Find the item in catalog
+        for item in grocery_manager.stores.get(store_name, []):
             if item["name"] == item_name:
-                item_id = item["id"]
-                break
+                return display_text, item["id"], item["name"], item["price"], item["category"]
         
-        if not item_id:
-            return current_selections, "❌ Item not found", "No items selected", "", "", 0, None, ""
-        
-        # Add-only selection (no toggle to avoid double-fire issues)
-        if current_selections is None:
-            current_selections = []
-        
-        # Only add if not already selected (prevent duplicates from double-fire)
-        if item_id not in current_selections:
-            current_selections.append(item_id)
-            msg = f"➕ Selected: {item_name}"
-        else:
-            # Already selected, don't change anything
-            msg = f"✓ Already selected: {item_name}"
-        
-        # Create display text
-        if len(current_selections) == 0:
-            display_text = "No items selected"
-        else:
-            # Get names of selected items
-            selected_names = []
-            for sel_id in current_selections:
-                for item in all_items:
-                    if item["id"] == sel_id:
-                        selected_names.append(item["name"])
-                        break
-            display_text = f"Selected {len(current_selections)} items: " + ", ".join(selected_names)
-        
-        # Don't update catalog table here to prevent flickering
-        # The selected items display text will show what's selected
-        
-        # Also populate edit fields with the last clicked item
-        clicked_item = None
-        for item in all_items:
-            if item["id"] == item_id:
-                clicked_item = item
-                break
-        
-        if clicked_item:
-            return (current_selections, msg, display_text, 
-                   item_id, clicked_item["name"], clicked_item["price"], 
-                   clicked_item["category"], clicked_item["unit"])
-        else:
-            return current_selections, msg, display_text, "", "", 0, None, ""
+        return display_text, "", "", 0.0, None
     
-    catalog_table.select(
-        fn=select_catalog_item,
-        inputs=[category_filter, selected_catalog_item_ids],
-        outputs=[selected_catalog_item_ids, status_message, selected_catalog_items_display,
-                selected_edit_item_id, edit_item_name, edit_item_price, edit_item_category, edit_item_unit]
+    catalog_checkboxes.change(
+        fn=on_catalog_selection_change,
+        inputs=[catalog_checkboxes],
+        outputs=[selected_catalog_items_display, selected_edit_item_id, edit_item_name, edit_item_price, edit_item_category]
     )
     
     # Add to List button - adds all selected items (quantity 1 each)
-    def add_to_list_handler(item_ids, current_filter, list_category_filter, sort_by):
-        if not item_ids or len(item_ids) == 0:
-            return "❌ Please select at least one item from the catalog first", None, None, [], "No items selected", None, get_summary_text()
+    def add_to_list_handler(selected_catalog_items, current_filter, list_category_filter):
+        """Add selected catalog items to shopping list"""
+        if not selected_catalog_items or len(selected_catalog_items) == 0:
+            catalog_choices = get_catalog_choices(current_filter, "")
+            shopping_choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
+            return "❌ Please select items from the catalog first", gr.CheckboxGroup(choices=catalog_choices, value=[]), gr.CheckboxGroup(choices=shopping_choices, value=[]), get_filtered_total(list_category_filter), "No items selected", get_summary_text()
         
         # Add all selected items
         added_items = []
-        for item_id in item_ids:
-            msg = add_to_cart(item_id, 1)  # Add 1 of each item
-            # Extract item name from message
-            if "Added" in msg or "Updated" in msg:
-                # Find item name
-                for item in grocery_manager.stores.get(store_name, []):
-                    if item["id"] == item_id:
-                        added_items.append(item["name"])
-                        break
+        for selected in selected_catalog_items:
+            # Extract item name from "Item Name - $X.XX (category)" or "Item Name - $X.XX"
+            item_name = selected.split(" - $")[0].strip()
+            
+            # Find item ID by name
+            for item in grocery_manager.stores.get(store_name, []):
+                if item["name"] == item_name:
+                    msg = add_to_cart(item["id"], 1)
+                    if "Added" in msg or "Updated" in msg:
+                        added_items.append(item_name)
+                    break
         
         # Create success message
         if len(added_items) == 1:
             success_msg = f"✅ Added {added_items[0]} to list"
+        elif len(added_items) > 1:
+            success_msg = f"✅ Added {len(added_items)} items to list"
         else:
-            success_msg = f"✅ Added {len(added_items)} items to list: " + ", ".join(added_items)
+            success_msg = "❌ Could not add items"
         
-        # Get updated shopping list (filtered and sorted)
-        df_display = get_filtered_shopping_list(list_category_filter)
-        df_display = sort_shopping_list(df_display, sort_by)
-        
-        # Get updated dropdown choices (filtered by category) and reset value
-        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
-        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
-        
-        # Get filtered total
+        # Get updated checkbox choices
+        catalog_choices = get_catalog_choices(current_filter, "")
+        shopping_choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
         filtered_total = get_filtered_total(list_category_filter)
         
-        # Clear selections after adding (no need to update catalog table)
-        # Also update summary display
-        return success_msg, df_display, filtered_total, [], "No items selected", dropdown_update, get_summary_text()
+        # Clear catalog selections, update shopping list
+        return success_msg, gr.CheckboxGroup(choices=catalog_choices, value=[]), gr.CheckboxGroup(choices=shopping_choices, value=[]), filtered_total, "No items selected", get_summary_text()
     
     add_to_list_btn.click(
         fn=add_to_list_handler,
-        inputs=[selected_catalog_item_ids, category_filter, shopping_list_category_filter, shopping_list_sort],
-        outputs=[status_message, shopping_list_table, list_total, selected_catalog_item_ids, selected_catalog_items_display, item_selector_dropdown, summary_display]
+        inputs=[catalog_checkboxes, category_filter, shopping_list_category_filter],
+        outputs=[status_message, catalog_checkboxes, shopping_list_checkboxes, list_total, selected_catalog_items_display, summary_display]
     )
     
-    # Remove from List button
-    def remove_from_list_handler(selected_item_state, list_category_filter, sort_by):
-        # Get current state for error returns
-        df_display = get_filtered_shopping_list(list_category_filter)
-        df_display = sort_shopping_list(df_display, sort_by)
+    # Remove from List button - now handles multi-select
+    def remove_from_list_handler(selected_items, list_category_filter):
+        """Remove selected items from shopping list"""
+        # Check if any items are selected
+        if not selected_items or len(selected_items) == 0:
+            choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
+            return "❌ Please select items to delete", gr.CheckboxGroup(choices=choices, value=[]), get_filtered_total(list_category_filter), get_summary_text()
+        
+        # Remove all selected items
+        removed_names = []
+        for selected in selected_items:
+            # Extract item name from "Item Name (qty: X)"
+            item_name = selected.split(" (qty:")[0].strip()
+            
+            # Find item ID by name
+            for item in grocery_manager.shopping_list:
+                if item.get("store") == store_name and item["name"] == item_name:
+                    remove_from_cart(item["id"])
+                    removed_names.append(item_name)
+                    break
+        
+        # Get updated checkbox choices
+        choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
         filtered_total = get_filtered_total(list_category_filter)
         
-        # Check if item is selected
-        if not selected_item_state or selected_item_state == "None":
-            return "❌ Please select an item from the dropdown first", df_display, filtered_total, gr.Dropdown(choices=get_shopping_list_items_for_dropdown(list_category_filter), value=None), None, "No item selected", get_summary_text()
+        if len(removed_names) == 1:
+            msg = f"🗑️ Removed {removed_names[0]}"
+        else:
+            msg = f"🗑️ Removed {len(removed_names)} items"
         
-        # Extract item name from dropdown selection (format: "Item Name (qty: X)")
-        item_name = selected_item_state.split(" (qty:")[0].strip()
-        
-        # Find item ID by name
-        item_id = None
-        for item in grocery_manager.shopping_list:
-            if item.get("store") == store_name and item["name"] == item_name:
-                item_id = item["id"]
-                break
-        
-        if not item_id:
-            return "❌ Item not found", df_display, filtered_total, gr.Dropdown(choices=get_shopping_list_items_for_dropdown(list_category_filter), value=None), None, "No item selected", get_summary_text()
-        
-        msg = remove_from_cart(item_id)[0]
-        
-        # Get updated shopping list (filtered and sorted)
-        df_display = get_filtered_shopping_list(list_category_filter)
-        df_display = sort_shopping_list(df_display, sort_by)
-        
-        # Get updated dropdown choices (filtered by category) and reset value
-        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
-        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
-        
-        # Get filtered total
-        filtered_total = get_filtered_total(list_category_filter)
-        
-        # Clear selection and update summary
-        return msg, df_display, filtered_total, dropdown_update, None, "No item selected", get_summary_text()
+        return msg, gr.CheckboxGroup(choices=choices, value=[]), filtered_total, get_summary_text()
     
     remove_from_list_btn.click(
         fn=remove_from_list_handler,
-        inputs=[selected_list_item_name, shopping_list_category_filter, shopping_list_sort],
-        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display, summary_display]
+        inputs=[shopping_list_checkboxes, shopping_list_category_filter],
+        outputs=[status_message, shopping_list_checkboxes, list_total, summary_display]
     )
     
-    # Update quantity for selected item
-    def update_quantity_handler(selected_item_state, new_qty, list_category_filter):
-        # Get current shopping list to avoid clearing it on error (filtered by category)
-        df_display = get_filtered_shopping_list(list_category_filter)
-        
-        filtered_total = get_filtered_total(list_category_filter)
-        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
-        
-        # Check if item is selected
-        if not selected_item_state or selected_item_state == "None":
-            return "❌ Please select an item from the dropdown first", df_display, filtered_total, gr.Dropdown(choices=dropdown_choices, value=None), None, "No item selected", get_summary_text()
-        
-        if new_qty < 1:
-            return "❌ Quantity must be at least 1", df_display, filtered_total, gr.Dropdown(choices=dropdown_choices, value=None), selected_item_state, f"✓ Selected: {selected_item_state}", get_summary_text()
-        
-        # Extract item name from dropdown selection (format: "Item Name (qty: X)")
-        item_name = selected_item_state.split(" (qty:")[0].strip()
-        
-        # Find item ID by name
-        item_id = None
-        for item in grocery_manager.shopping_list:
-            if item.get("store") == store_name and item["name"] == item_name:
-                item_id = item["id"]
-                break
-        
-        if not item_id:
-            return "❌ Item not found", df_display, filtered_total, gr.Dropdown(choices=dropdown_choices, value=None), None, "No item selected", get_summary_text()
-        
-        # Update the quantity
-        msg = update_item_quantity(item_id, int(new_qty))
-        
-        # Refresh shopping list after update (filtered by category)
-        df_display = get_filtered_shopping_list(list_category_filter)
-        
-        # Get updated dropdown choices (with new quantities, filtered by category) and reset value
-        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
-        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=None)
-        
-        # Get filtered total
-        filtered_total = get_filtered_total(list_category_filter)
-        
-        # After successful update, clear selection and update summary
-        success_msg = f"✅ Updated {item_name} to quantity {new_qty}"
-        
-        return success_msg, df_display, filtered_total, dropdown_update, None, "No item selected", get_summary_text()
-    
-    update_quantity_btn.click(
-        fn=update_quantity_handler,
-        inputs=[selected_list_item_name, update_quantity_input, shopping_list_category_filter],
-        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display, summary_display]
-    )
+    # Hidden update quantity handler (legacy, button is hidden)
     
     # ═══════════════════════════════════════════════════════════════
-    # QUICK +/- QUANTITY BUTTONS
+    # QUICK +/- QUANTITY BUTTONS (works with checkbox selection)
     # ═══════════════════════════════════════════════════════════════
     
-    def increase_quantity(selected_item_state, list_category_filter, sort_by):
-        """Increment quantity by 1"""
-        if not selected_item_state or selected_item_state == "None":
-            return "❌ Select an item first", None, None, None, None, "👆 Tap a row", "Qty: -", get_summary_text()
+    def increase_quantity(selected_items, list_category_filter):
+        """Increment quantity by 1 for first selected item"""
+        if not selected_items or len(selected_items) == 0:
+            choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
+            return "❌ Select an item first", gr.CheckboxGroup(choices=choices, value=[]), get_filtered_total(list_category_filter), get_summary_text()
         
-        # Extract item name from dropdown selection
-        item_name = selected_item_state.split(" (qty:")[0].strip()
+        # Use first selected item
+        selected = selected_items[0]
+        item_name = selected.split(" (qty:")[0].strip()
         
         # Find item and get current quantity
         item_id = None
@@ -1022,29 +857,31 @@ def build_store_tab(store_name):
                 break
         
         if not item_id:
-            return "❌ Item not found", None, None, None, None, "👆 Tap a row", "Qty: -", get_summary_text()
+            choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
+            return "❌ Item not found", gr.CheckboxGroup(choices=choices, value=[]), get_filtered_total(list_category_filter), get_summary_text()
         
         # Increment quantity
         new_qty = current_qty + 1
         update_item_quantity(item_id, new_qty)
         
-        # Refresh displays (with sort)
-        df_display = get_filtered_shopping_list(list_category_filter)
-        df_display = sort_shopping_list(df_display, sort_by)
+        # Refresh checkbox choices with updated quantities
+        choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
         filtered_total = get_filtered_total(list_category_filter)
-        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
-        new_dropdown_value = f"{item_name} (qty: {new_qty})"
-        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=new_dropdown_value)
         
-        return f"✅ {item_name}: {current_qty} → {new_qty}", df_display, filtered_total, dropdown_update, new_dropdown_value, f"✅ {item_name}", f"Qty: {new_qty}", get_summary_text()
+        # Keep item selected (with new qty)
+        new_selected = f"{item_name} (qty: {new_qty})"
+        
+        return f"✅ {item_name}: {current_qty} → {new_qty}", gr.CheckboxGroup(choices=choices, value=[new_selected]), filtered_total, get_summary_text()
     
-    def decrease_quantity(selected_item_state, list_category_filter, sort_by):
-        """Decrement quantity by 1 (minimum 1)"""
-        if not selected_item_state or selected_item_state == "None":
-            return "❌ Select an item first", None, None, None, None, "👆 Tap a row", "Qty: -", get_summary_text()
+    def decrease_quantity(selected_items, list_category_filter):
+        """Decrement quantity by 1 (minimum 1) for first selected item"""
+        if not selected_items or len(selected_items) == 0:
+            choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
+            return "❌ Select an item first", gr.CheckboxGroup(choices=choices, value=[]), get_filtered_total(list_category_filter), get_summary_text()
         
-        # Extract item name from dropdown selection
-        item_name = selected_item_state.split(" (qty:")[0].strip()
+        # Use first selected item
+        selected = selected_items[0]
+        item_name = selected.split(" (qty:")[0].strip()
         
         # Find item and get current quantity
         item_id = None
@@ -1056,35 +893,36 @@ def build_store_tab(store_name):
                 break
         
         if not item_id:
-            return "❌ Item not found", None, None, None, None, "👆 Tap a row", "Qty: -", get_summary_text()
+            choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
+            return "❌ Item not found", gr.CheckboxGroup(choices=choices, value=[]), get_filtered_total(list_category_filter), get_summary_text()
         
         # Decrement quantity (minimum 1)
         if current_qty <= 1:
-            return f"⚠️ {item_name} is already at minimum (1)", None, None, None, selected_item_state, f"✅ {item_name}", f"Qty: {current_qty}", get_summary_text()
+            choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
+            return f"⚠️ {item_name} already at minimum (1)", gr.CheckboxGroup(choices=choices, value=selected_items), get_filtered_total(list_category_filter), get_summary_text()
         
         new_qty = current_qty - 1
         update_item_quantity(item_id, new_qty)
         
-        # Refresh displays (with sort)
-        df_display = get_filtered_shopping_list(list_category_filter)
-        df_display = sort_shopping_list(df_display, sort_by)
+        # Refresh checkbox choices with updated quantities
+        choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
         filtered_total = get_filtered_total(list_category_filter)
-        dropdown_choices = get_shopping_list_items_for_dropdown(list_category_filter)
-        new_dropdown_value = f"{item_name} (qty: {new_qty})"
-        dropdown_update = gr.Dropdown(choices=dropdown_choices, value=new_dropdown_value)
         
-        return f"✅ {item_name}: {current_qty} → {new_qty}", df_display, filtered_total, dropdown_update, new_dropdown_value, f"✅ {item_name}", f"Qty: {new_qty}", get_summary_text()
+        # Keep item selected (with new qty)
+        new_selected = f"{item_name} (qty: {new_qty})"
+        
+        return f"✅ {item_name}: {current_qty} → {new_qty}", gr.CheckboxGroup(choices=choices, value=[new_selected]), filtered_total, get_summary_text()
     
     increase_qty_btn.click(
         fn=increase_quantity,
-        inputs=[selected_list_item_name, shopping_list_category_filter, shopping_list_sort],
-        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display, current_qty_display, summary_display]
+        inputs=[shopping_list_checkboxes, shopping_list_category_filter],
+        outputs=[status_message, shopping_list_checkboxes, list_total, summary_display]
     )
     
     decrease_qty_btn.click(
         fn=decrease_quantity,
-        inputs=[selected_list_item_name, shopping_list_category_filter, shopping_list_sort],
-        outputs=[status_message, shopping_list_table, list_total, item_selector_dropdown, selected_list_item_name, selected_list_item_display, current_qty_display, summary_display]
+        inputs=[shopping_list_checkboxes, shopping_list_category_filter],
+        outputs=[status_message, shopping_list_checkboxes, list_total, summary_display]
     )
     
     # Email list
@@ -1095,104 +933,108 @@ def build_store_tab(store_name):
     )
     
     # Add new item to catalog
-    def add_new_catalog_item(name, category, price, unit, current_filter):
-        msg = add_catalog_item(store_name, name, category, price, unit)
-        # Refresh catalog with current filter to maintain category selection
-        df = get_store_items(store_name, current_filter)
-        df_display = df[["name", "category", "price", "unit"]]
-        return msg, df_display, "", 0, None, ""  # Reset category to None (dropdown default)
+    def add_new_catalog_item(name, category, price, current_filter):
+        msg = add_catalog_item(store_name, name, category, price, "each")  # Default unit
+        # Refresh catalog checkboxes
+        choices = get_catalog_choices(current_filter, "")
+        return msg, gr.CheckboxGroup(choices=choices, value=[]), "", 0, None
     
     add_catalog_btn.click(
         fn=add_new_catalog_item,
-        inputs=[new_item_name, new_item_category, new_item_price, new_item_unit, category_filter],
-        outputs=[status_message, catalog_table, new_item_name, new_item_price, new_item_category, new_item_unit]
+        inputs=[new_item_name, new_item_category, new_item_price, category_filter],
+        outputs=[status_message, catalog_checkboxes, new_item_name, new_item_price, new_item_category]
     )
     
     # Update existing catalog item
-    def update_catalog_item_handler(item_id, name, price, category, unit, current_filter):
+    def update_catalog_item_handler(item_id, name, price, category, current_filter):
         if not item_id or item_id.strip() == "":
-            return "❌ Please select an item from the catalog first to update", None, "", "", 0, None, ""
+            choices = get_catalog_choices(current_filter, "")
+            return "❌ Please select an item from the catalog first to update", gr.CheckboxGroup(choices=choices, value=[]), "", "", 0, None
         
         if not name or not category or price <= 0:
-            return "❌ Please fill in all fields with valid values", None, item_id, name, price, category, unit
+            choices = get_catalog_choices(current_filter, "")
+            return "❌ Please fill in all fields with valid values", gr.CheckboxGroup(choices=choices, value=[]), item_id, name, price, category
         
         # Normalize text to remove Unicode formatting (bold, italic, etc.)
         name_normalized = normalize_text(name.strip())
         category_normalized = normalize_text(category.strip())
         
-        # Update the item
+        # Update the item (keep existing unit)
         success = grocery_manager.update_catalog_item(
             item_id=item_id,
             name=name_normalized,
             category=category_normalized,
-            price=float(price),
-            unit=unit.strip()
+            price=float(price)
         )
         
         if success:
-            # Refresh catalog with current filter
-            df = get_store_items(store_name, current_filter)
-            df_display = df[["name", "category", "price", "unit"]]
+            # Refresh catalog checkboxes
+            choices = get_catalog_choices(current_filter, "")
             
             # Clear edit fields after successful update
-            return f"✅ Updated '{name_normalized}' successfully (saved to file)", df_display, "", "", 0, None, ""
+            return f"✅ Updated '{name_normalized}' successfully", gr.CheckboxGroup(choices=choices, value=[]), "", "", 0, None
         else:
-            return f"❌ Item not found", None, item_id, name, price, category, unit
+            choices = get_catalog_choices(current_filter, "")
+            return f"❌ Item not found", gr.CheckboxGroup(choices=choices, value=[]), item_id, name, price, category
     
     update_catalog_btn.click(
         fn=update_catalog_item_handler,
-        inputs=[selected_edit_item_id, edit_item_name, edit_item_price, edit_item_category, edit_item_unit, category_filter],
-        outputs=[status_message, catalog_table, selected_edit_item_id, edit_item_name, edit_item_price, edit_item_category, edit_item_unit]
+        inputs=[selected_edit_item_id, edit_item_name, edit_item_price, edit_item_category, category_filter],
+        outputs=[status_message, catalog_checkboxes, selected_edit_item_id, edit_item_name, edit_item_price, edit_item_category]
     )
     
     # Delete selected items from catalog
-    def delete_selected_catalog_items(item_ids, current_filter):
-        if not item_ids or len(item_ids) == 0:
-            return "❌ Please select at least one item from the catalog first", None, [], "No items selected"
+    def delete_selected_catalog_items(selected_items, current_filter):
+        """Delete selected items from catalog (using checkbox selections)"""
+        if not selected_items or len(selected_items) == 0:
+            choices = get_catalog_choices(current_filter, "")
+            return "❌ Please select items to delete first", gr.CheckboxGroup(choices=choices, value=[]), "No items selected"
         
         # Delete all selected items
         deleted_items = []
         store_items = grocery_manager.stores.get(store_name, [])
-        for item_id in item_ids:
+        
+        for selected in selected_items:
+            # Extract item name from "Item Name - $X.XX (category)"
+            item_name = selected.split(" - $")[0].strip()
+            
             # Find and remove item
             for i, item in enumerate(store_items):
-                if item["id"] == item_id:
+                if item["name"] == item_name:
                     deleted_items.append(item["name"])
                     store_items.pop(i)
                     break
         
-        # Save once after all deletions (more efficient than saving in loop)
+        # Save once after all deletions
         if deleted_items:
             grocery_manager._save_catalog()
         
         # Create success message
         if len(deleted_items) == 1:
-            msg = f"✅ Removed '{deleted_items[0]}' from catalog (saved to file)"
+            msg = f"✅ Removed '{deleted_items[0]}' from catalog"
         else:
-            msg = f"✅ Removed {len(deleted_items)} items from catalog (saved to file)"
+            msg = f"✅ Removed {len(deleted_items)} items from catalog"
         
-        # Refresh catalog with current filter to maintain category selection
-        df = get_store_items(store_name, current_filter)
-        df_display = df[["name", "category", "price", "unit"]]
+        # Refresh catalog checkboxes
+        choices = get_catalog_choices(current_filter, "")
         
-        # Clear selections after deleting
-        return msg, df_display, [], "No items selected"
+        return msg, gr.CheckboxGroup(choices=choices, value=[]), "No items selected"
     
     delete_catalog_btn.click(
         fn=delete_selected_catalog_items,
-        inputs=[selected_catalog_item_ids, category_filter],
-        outputs=[status_message, catalog_table, selected_catalog_item_ids, selected_catalog_items_display]
+        inputs=[catalog_checkboxes, category_filter],
+        outputs=[status_message, catalog_checkboxes, selected_catalog_items_display]
     )
     
     # Clear all selections button
     def clear_all_selections(current_filter):
-        # No need to update catalog table without checkmarks
-        return [], "No items selected", "✓ Cleared all selections"
+        choices = get_catalog_choices(current_filter, "")
+        return gr.CheckboxGroup(choices=choices, value=[]), "No items selected", "✓ Cleared all selections"
     
     clear_selections_btn.click(
         fn=clear_all_selections,
         inputs=[category_filter],
-        outputs=[selected_catalog_item_ids, selected_catalog_items_display, status_message]
+        outputs=[catalog_checkboxes, selected_catalog_items_display, status_message]
     )
     
     # Initialize catalog table on page load
@@ -1202,6 +1044,88 @@ def build_store_tab(store_name):
 MOBILE_CSS = """
 /* Hide footer */
 footer {visibility: hidden}
+
+/* ═══════════════════════════════════════════════════════════════
+   CHECKBOX ITEMS - Bottom Dividers Style
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Style each checkbox item with bottom divider */
+.checkbox-group label,
+.gradio-checkbox-group label,
+[data-testid="checkbox-group"] label {
+    display: block !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 14px 16px !important;
+    margin: 0 !important;
+    cursor: pointer !important;
+    transition: background-color 0.15s ease !important;
+    border-bottom: 1px solid #e0e0e0 !important;
+    background-color: #ffffff !important;
+}
+
+/* Ensure the checkbox group container is full width */
+.checkbox-group > div,
+.gradio-checkbox-group > div,
+[data-testid="checkbox-group"] > div {
+    width: 100% !important;
+}
+
+/* Make sure span inside label is also full width */
+.checkbox-group label span,
+.gradio-checkbox-group label span,
+[data-testid="checkbox-group"] label span {
+    display: inline !important;
+}
+
+/* Remove border from last item */
+.checkbox-group label:last-child,
+.gradio-checkbox-group label:last-child,
+[data-testid="checkbox-group"] label:last-child {
+    border-bottom: none !important;
+}
+
+/* Hover effect */
+.checkbox-group label:hover,
+.gradio-checkbox-group label:hover,
+[data-testid="checkbox-group"] label:hover {
+    background-color: #f5f5f5 !important;
+}
+
+/* Selected/checked state */
+.checkbox-group label:has(input:checked),
+.gradio-checkbox-group label:has(input:checked),
+[data-testid="checkbox-group"] label:has(input:checked) {
+    background-color: #e3f2fd !important;
+    color: #1a1a1a !important;
+}
+
+/* Ensure text inside selected items is visible */
+.checkbox-group label:has(input:checked) span,
+.gradio-checkbox-group label:has(input:checked) span,
+[data-testid="checkbox-group"] label:has(input:checked) span {
+    color: #1a1a1a !important;
+}
+
+/* Make checkbox larger and easier to tap */
+.checkbox-group input[type="checkbox"],
+.gradio-checkbox-group input[type="checkbox"],
+[data-testid="checkbox-group"] input[type="checkbox"] {
+    width: 20px !important;
+    height: 20px !important;
+    margin-right: 12px !important;
+}
+
+/* Container styling */
+.checkbox-group,
+.gradio-checkbox-group,
+[data-testid="checkbox-group"] {
+    max-height: 50vh !important;
+    overflow-y: auto !important;
+    border: 1px solid #e0e0e0 !important;
+    border-radius: 8px !important;
+    -webkit-overflow-scrolling: touch;
+}
 
 /* ═══════════════════════════════════════════════════════════════
    DARK MODE SUPPORT - Follows system preference
@@ -1258,66 +1182,122 @@ footer {visibility: hidden}
         background-color: #1a1a2e !important;
         color: #eee !important;
     }
-}
-
-/* Enable horizontal scrolling on tables */
-.dataframe-container, .gradio-dataframe {
-    overflow-x: auto !important;
-    overflow-y: auto !important;
-    -webkit-overflow-scrolling: touch;
-    max-height: 60vh !important;  /* Limit height to 60% of viewport */
-}
-
-.dataframe-container table {
-    min-width: 400px;
-    white-space: nowrap;
-}
-
-/* Better table scrolling on mobile */
-@media (max-width: 768px) {
-    .dataframe-container, .gradio-dataframe {
-        max-height: 50vh !important;  /* Smaller on mobile */
-        overflow: auto !important;
-        -webkit-overflow-scrolling: touch;
-        touch-action: pan-x pan-y;
+    
+    /* Dark mode checkbox dividers */
+    .checkbox-group label,
+    .gradio-checkbox-group label,
+    [data-testid="checkbox-group"] label {
+        background-color: #1a1a2e !important;
+        border-bottom-color: #0f3460 !important;
+        color: #eee !important;
     }
     
-    /* Ensure table body scrolls */
-    .dataframe-container table {
-        display: block;
-        overflow: auto;
+    .checkbox-group label:hover,
+    .gradio-checkbox-group label:hover,
+    [data-testid="checkbox-group"] label:hover {
+        background-color: #16213e !important;
+    }
+    
+    .checkbox-group label:has(input:checked),
+    .gradio-checkbox-group label:has(input:checked),
+    [data-testid="checkbox-group"] label:has(input:checked) {
+        background-color: #0f3460 !important;
+        color: #ffffff !important;
+    }
+    
+    .checkbox-group label:has(input:checked) span,
+    .gradio-checkbox-group label:has(input:checked) span,
+    [data-testid="checkbox-group"] label:has(input:checked) span {
+        color: #ffffff !important;
+    }
+    
+    /* Dark mode container border */
+    .checkbox-group,
+    .gradio-checkbox-group,
+    [data-testid="checkbox-group"] {
+        border-color: #0f3460 !important;
     }
 }
 
-/* Ensure last row is fully visible (add bottom padding) */
+/* ═══════════════════════════════════════════════════════════════
+   iOS SCROLL FIX - Prevent rubber band bounce hiding last item
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Desktop table scrolling */
+.dataframe-container, .gradio-dataframe {
+    overflow: auto !important;
+    max-height: 400px !important;
+}
+
 .dataframe-container table {
-    margin-bottom: 40px !important;
+    min-width: 200px;
 }
 
-.dataframe-container table tbody tr:last-child {
-    margin-bottom: 30px !important;
+/* MOBILE iOS SCROLL FIX */
+@media (max-width: 768px) {
+    /* Fixed height container - prevents iOS bounce issues */
+    .dataframe-container, .gradio-dataframe {
+        max-height: 300px !important;
+        height: 300px !important;
+        overflow-y: scroll !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain !important;
+        overscroll-behavior-y: contain !important;
+        padding-bottom: 60px !important;
+    }
+    
+    /* Fixed table layout for consistent column widths */
+    .dataframe-container table {
+        width: 100% !important;
+        table-layout: fixed !important;
+        margin-bottom: 80px !important;
+    }
+    
+    /* Fixed column widths - Name column wider, Qty narrow */
+    .dataframe-container table th:first-child,
+    .dataframe-container table td:first-child {
+        width: 75% !important;
+        max-width: 200px !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+    }
+    
+    .dataframe-container table th:last-child,
+    .dataframe-container table td:last-child {
+        width: 25% !important;
+        text-align: center !important;
+    }
+    
+    /* Compact mobile table styling */
+    .dataframe-container table td,
+    .dataframe-container table th {
+        font-size: 14px !important;
+        padding: 10px 8px !important;
+    }
+    
+    /* Extra padding on last row */
+    .dataframe-container table tr:last-child td {
+        padding-bottom: 30px !important;
+    }
+    
+    /* Scroll buffer at end of table */
+    .dataframe-container table tbody::after {
+        content: "";
+        display: table-row;
+        height: 80px;
+    }
 }
 
-.dataframe-container table tr:last-child td {
-    padding-bottom: 25px !important;
-    border-bottom: none !important;
-}
-
-/* Add extra space at bottom of scroll container */
-.dataframe-container {
-    padding-bottom: 50px !important;
-}
-
-.dataframe-container::after {
-    content: "";
-    display: block;
-    height: 40px;
-}
-
-/* Gradio specific table wrapper */
+/* Gradio wrapper spacing */
 .table-wrap {
-    padding-bottom: 40px !important;
-    margin-bottom: 20px !important;
+    margin-bottom: 16px !important;
+}
+
+/* Simple table hover styling (no tap-to-select on shopping list) */
+table tbody tr:hover {
+    background-color: #f5f5f5 !important;
 }
 
 /* Mobile responsive layout */
@@ -1405,6 +1385,10 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
         with gr.Tab("🛒 Costco"):
             build_store_tab("Costco")
         
+        # Indian Groceries Tab
+        with gr.Tab("🛒 Indian Groceries"):
+            build_store_tab("Indian Groceries")
+        
         # Combined Shopping List Tab
         with gr.Tab("📋 All Stores Summary"):
             gr.Markdown("## Combined Shopping Lists - All Stores")
@@ -1437,12 +1421,25 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                         interactive=False,
                         row_count=5
                     )
-                
+            
+            with gr.Row():
                 with gr.Column():
                     gr.Markdown("### 🛒 Costco (Monthly)")
                     co_total = gr.Textbox(label="Costco Total", value="$0.00", interactive=False)
                     co_cart = gr.DataFrame(
                         value=lambda: get_shopping_list_by_store("Costco")[["name", "price", "quantity", "total"]] if not get_shopping_list_by_store("Costco").empty else pd.DataFrame(columns=["name", "price", "quantity", "total"]),
+                        headers=["Name", "Price", "Quantity", "Total"],
+                        datatype=["str", "number", "number", "number"],
+                        col_count=(4, "fixed"),
+                        interactive=False,
+                        row_count=5
+                    )
+                
+                with gr.Column():
+                    gr.Markdown("### 🛒 Indian Groceries (Weekly)")
+                    ig_total = gr.Textbox(label="Indian Groceries Total", value="$0.00", interactive=False)
+                    ig_cart = gr.DataFrame(
+                        value=lambda: get_shopping_list_by_store("Indian Groceries")[["name", "price", "quantity", "total"]] if not get_shopping_list_by_store("Indian Groceries").empty else pd.DataFrame(columns=["name", "price", "quantity", "total"]),
                         headers=["Name", "Price", "Quantity", "Total"],
                         datatype=["str", "number", "number", "number"],
                         col_count=(4, "fixed"),
@@ -1465,6 +1462,9 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                 co_df = get_shopping_list_by_store("Costco")
                 co_df = co_df[["name", "price", "quantity", "total"]] if not co_df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
                 
+                ig_df = get_shopping_list_by_store("Indian Groceries")
+                ig_df = ig_df[["name", "price", "quantity", "total"]] if not ig_df.empty else pd.DataFrame(columns=["name", "price", "quantity", "total"])
+                
                 return (
                     tj_df,
                     get_store_total("Trader Joe's"),
@@ -1472,13 +1472,15 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                     get_store_total("Safeway"),
                     co_df,
                     get_store_total("Costco"),
+                    ig_df,
+                    get_store_total("Indian Groceries"),
                     f"${grocery_manager.get_total_cost():.2f}"
                 )
             
             refresh_all_button.click(
                 fn=refresh_all_lists,
                 inputs=[],
-                outputs=[tj_cart, tj_total, sf_cart, sf_total, co_cart, co_total, grand_total]
+                outputs=[tj_cart, tj_total, sf_cart, sf_total, co_cart, co_total, ig_cart, ig_total, grand_total]
             )
         
         # Budget Tracker Tab
@@ -1502,12 +1504,19 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                     sf_budget_spent = gr.Textbox(label="Spent", value="$0.00", interactive=False)
                     sf_budget_limit = gr.Textbox(label="Budget", value="$150.00", interactive=False)
                     sf_budget_status = gr.Markdown()
-                
+            
+            with gr.Row():
                 with gr.Column():
                     gr.Markdown("**🛒 Costco (Monthly)**")
                     co_budget_spent = gr.Textbox(label="Spent", value="$0.00", interactive=False)
                     co_budget_limit = gr.Textbox(label="Budget", value="$300.00", interactive=False)
                     co_budget_status = gr.Markdown()
+                
+                with gr.Column():
+                    gr.Markdown("**🛒 Indian Groceries (Weekly)**")
+                    ig_budget_spent = gr.Textbox(label="Spent", value="$0.00", interactive=False)
+                    ig_budget_limit = gr.Textbox(label="Budget", value="$100.00", interactive=False)
+                    ig_budget_status = gr.Markdown()
             
             # Overall budget status
             gr.Markdown("### 📊 Overall Budget")
@@ -1530,11 +1539,13 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                 tj_spent_val = float(get_store_total("Trader Joe's").replace("$", ""))
                 sf_spent_val = float(get_store_total("Safeway").replace("$", ""))
                 co_spent_val = float(get_store_total("Costco").replace("$", ""))
+                ig_spent_val = float(get_store_total("Indian Groceries").replace("$", ""))
                 
                 # Get budget limits
                 tj_budget = grocery_manager.store_budgets.get("Trader Joe's", 200.0)
                 sf_budget = grocery_manager.store_budgets.get("Safeway", 150.0)
                 co_budget = grocery_manager.store_budgets.get("Costco", 300.0)
+                ig_budget = grocery_manager.store_budgets.get("Indian Groceries", 100.0)
                 
                 # Calculate status for each store
                 def get_store_status(spent, budget):
@@ -1553,11 +1564,13 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                 tj_status = get_store_status(tj_spent_val, tj_budget)
                 sf_status = get_store_status(sf_spent_val, sf_budget)
                 co_status = get_store_status(co_spent_val, co_budget)
+                ig_status = get_store_status(ig_spent_val, ig_budget)
                 
                 return (
                     f"${tj_spent_val:.2f}", f"${tj_budget:.2f}", tj_status,
                     f"${sf_spent_val:.2f}", f"${sf_budget:.2f}", sf_status,
                     f"${co_spent_val:.2f}", f"${co_budget:.2f}", co_status,
+                    f"${ig_spent_val:.2f}", f"${ig_budget:.2f}", ig_status,
                     status, f"### {warning}", progress
                 )
             
@@ -1569,6 +1582,7 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                     tj_budget_spent, tj_budget_limit, tj_budget_status,
                     sf_budget_spent, sf_budget_limit, sf_budget_status,
                     co_budget_spent, co_budget_limit, co_budget_status,
+                    ig_budget_spent, ig_budget_limit, ig_budget_status,
                     budget_status, budget_warning, budget_progress
                 ]
             )
@@ -1581,6 +1595,7 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                     tj_budget_spent, tj_budget_limit, tj_budget_status,
                     sf_budget_spent, sf_budget_limit, sf_budget_status,
                     co_budget_spent, co_budget_limit, co_budget_status,
+                    ig_budget_spent, ig_budget_limit, ig_budget_status,
                     budget_status, budget_warning, budget_progress
                 ]
             )
@@ -1650,12 +1665,21 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                         value=grocery_manager.store_budgets.get("Safeway", 150), 
                         minimum=0
                     )
-                
+            
+            with gr.Row():
                 with gr.Column():
                     gr.Markdown("Costco (Monthly)")
                     co_budget_input = gr.Number(
                         label="Budget ($)", 
                         value=grocery_manager.store_budgets.get("Costco", 300), 
+                        minimum=0
+                    )
+                
+                with gr.Column():
+                    gr.Markdown("Indian Groceries (Weekly)")
+                    ig_budget_input = gr.Number(
+                        label="Budget ($)", 
+                        value=grocery_manager.store_budgets.get("Indian Groceries", 100), 
                         minimum=0
                     )
             
@@ -1671,19 +1695,20 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
             budget_message = gr.Textbox(label="Status", value="Set your budgets above and click Save")
             
             # Update budget function
-            def save_budgets(tj_budget, sf_budget, co_budget, total_budget):
+            def save_budgets(tj_budget, sf_budget, co_budget, ig_budget, total_budget):
                 grocery_manager.store_budgets = {
                     "Trader Joe's": tj_budget,
                     "Safeway": sf_budget,
-                    "Costco": co_budget
+                    "Costco": co_budget,
+                    "Indian Groceries": ig_budget
                 }
                 grocery_manager.budget = total_budget
                 
-                return f"✅ Budgets saved! TJ: ${tj_budget:.2f} | Safeway: ${sf_budget:.2f} | Costco: ${co_budget:.2f} | Total: ${total_budget:.2f}"
+                return f"✅ Budgets saved! TJ: ${tj_budget:.2f} | Safeway: ${sf_budget:.2f} | Costco: ${co_budget:.2f} | Indian: ${ig_budget:.2f} | Total: ${total_budget:.2f}"
             
             update_budget_button.click(
                 fn=save_budgets,
-                inputs=[tj_budget_input, sf_budget_input, co_budget_input, total_budget_input],
+                inputs=[tj_budget_input, sf_budget_input, co_budget_input, ig_budget_input, total_budget_input],
                 outputs=budget_message
             )
 
