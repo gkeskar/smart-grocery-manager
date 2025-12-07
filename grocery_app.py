@@ -23,11 +23,12 @@ class GroceryManager:
         # Data storage
         self.stores = {}
         self.shopping_list = []
-        self.budget = 650.0  # Default total budget
+        self.budget = 750.0  # Default total budget
         self.store_budgets = {
             "Trader Joe's": 200.0,   # Weekly
             "Safeway": 150.0,         # Bi-weekly
-            "Costco": 300.0           # Monthly
+            "Costco": 300.0,          # Monthly
+            "Indian Groceries": 100.0  # Weekly
         }
         self.email_address = "gandhali.aradhye@gmail.com"  # Default email
         
@@ -44,10 +45,95 @@ class GroceryManager:
         # Try loading from HuggingFace Hub first
         if HF_HUB_AVAILABLE and self.hf_token:
             if self._load_from_hub():
+                # Check if Indian Groceries store exists, add if missing
+                self._ensure_indian_groceries_store()
                 return
         
         # Fallback to local file
         self._load_or_initialize_local()
+        # Check if Indian Groceries store exists, add if missing
+        self._ensure_indian_groceries_store()
+    
+    def _ensure_indian_groceries_store(self):
+        """Ensure Indian Groceries store exists in the catalog"""
+        if "Indian Groceries" not in self.stores or len(self.stores.get("Indian Groceries", [])) == 0:
+            print("📦 Adding Indian Groceries store to catalog...")
+            self.stores["Indian Groceries"] = self._get_indian_groceries_items()
+            # Also ensure budget exists
+            if "Indian Groceries" not in self.store_budgets:
+                self.store_budgets["Indian Groceries"] = 100.0
+            self._schedule_save()  # Save the new store to Hub
+            print("✅ Indian Groceries store added with 50 items!")
+    
+    def _get_indian_groceries_items(self):
+        """Return the Indian Groceries sample items"""
+        return [
+            # Spices & Masalas
+            {"id": "ig-1", "name": "Garam Masala", "category": "Spices", "store": "Indian Groceries", "price": 4.99, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-2", "name": "Turmeric Powder", "category": "Spices", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-3", "name": "Cumin Seeds", "category": "Spices", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-4", "name": "Coriander Powder", "category": "Spices", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-5", "name": "Red Chili Powder", "category": "Spices", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-6", "name": "Mustard Seeds", "category": "Spices", "store": "Indian Groceries", "price": 2.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-7", "name": "Curry Leaves", "category": "Spices", "store": "Indian Groceries", "price": 1.99, "unit": "bunch", "default_quantity": 1},
+            {"id": "ig-8", "name": "Asafoetida (Hing)", "category": "Spices", "store": "Indian Groceries", "price": 5.99, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-9", "name": "Cardamom Pods", "category": "Spices", "store": "Indian Groceries", "price": 6.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-10", "name": "Fenugreek Seeds", "category": "Spices", "store": "Indian Groceries", "price": 2.49, "unit": "package", "default_quantity": 1},
+            
+            # Rice & Grains
+            {"id": "ig-11", "name": "Basmati Rice 10lb", "category": "Rice & Grains", "store": "Indian Groceries", "price": 15.99, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-12", "name": "Toor Dal (Split Pigeon Peas)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 4.99, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-13", "name": "Moong Dal (Yellow Lentils)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 4.49, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-14", "name": "Chana Dal (Split Chickpeas)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 3.99, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-15", "name": "Urad Dal (Black Gram)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 4.99, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-16", "name": "Poha (Flattened Rice)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-17", "name": "Rava (Semolina)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-18", "name": "Besan (Chickpea Flour)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 3.99, "unit": "bag", "default_quantity": 1},
+            
+            # Ready to Eat / Frozen
+            {"id": "ig-19", "name": "MTR Ready to Eat Paneer Butter Masala", "category": "Ready to Eat", "store": "Indian Groceries", "price": 3.99, "unit": "package", "default_quantity": 2},
+            {"id": "ig-20", "name": "Haldiram's Samosas (Frozen)", "category": "Frozen", "store": "Indian Groceries", "price": 5.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-21", "name": "Paratha (Frozen)", "category": "Frozen", "store": "Indian Groceries", "price": 4.49, "unit": "package", "default_quantity": 2},
+            {"id": "ig-22", "name": "Idli/Dosa Batter", "category": "Frozen", "store": "Indian Groceries", "price": 4.99, "unit": "container", "default_quantity": 1},
+            {"id": "ig-23", "name": "Paneer (Indian Cottage Cheese)", "category": "Dairy", "store": "Indian Groceries", "price": 5.99, "unit": "block", "default_quantity": 1},
+            {"id": "ig-24", "name": "Gulab Jamun Mix", "category": "Ready to Eat", "store": "Indian Groceries", "price": 3.49, "unit": "box", "default_quantity": 1},
+            
+            # Pickles & Chutneys
+            {"id": "ig-25", "name": "Mango Pickle", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 4.49, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-26", "name": "Lime Pickle", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 3.99, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-27", "name": "Tamarind Chutney", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 2.99, "unit": "bottle", "default_quantity": 1},
+            {"id": "ig-28", "name": "Mint Chutney", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 2.99, "unit": "bottle", "default_quantity": 1},
+            
+            # Snacks
+            {"id": "ig-29", "name": "Haldiram's Bhujia", "category": "Snacks", "store": "Indian Groceries", "price": 4.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-30", "name": "Chakli (Murukku)", "category": "Snacks", "store": "Indian Groceries", "price": 3.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-31", "name": "Mathri", "category": "Snacks", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-32", "name": "Khakhra", "category": "Snacks", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-33", "name": "Papad (Papadum)", "category": "Snacks", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            
+            # Beverages & Sweets
+            {"id": "ig-34", "name": "Chai Masala", "category": "Beverages", "store": "Indian Groceries", "price": 4.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-35", "name": "Rooh Afza", "category": "Beverages", "store": "Indian Groceries", "price": 5.99, "unit": "bottle", "default_quantity": 1},
+            {"id": "ig-36", "name": "Mango Pulp (Kesar)", "category": "Beverages", "store": "Indian Groceries", "price": 3.99, "unit": "can", "default_quantity": 2},
+            {"id": "ig-37", "name": "Kaju Katli", "category": "Sweets", "store": "Indian Groceries", "price": 9.99, "unit": "box", "default_quantity": 1},
+            {"id": "ig-38", "name": "Soan Papdi", "category": "Sweets", "store": "Indian Groceries", "price": 4.99, "unit": "box", "default_quantity": 1},
+            
+            # Oils & Ghee
+            {"id": "ig-39", "name": "Pure Ghee", "category": "Oils & Ghee", "store": "Indian Groceries", "price": 12.99, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-40", "name": "Mustard Oil", "category": "Oils & Ghee", "store": "Indian Groceries", "price": 6.99, "unit": "bottle", "default_quantity": 1},
+            {"id": "ig-41", "name": "Coconut Oil", "category": "Oils & Ghee", "store": "Indian Groceries", "price": 7.99, "unit": "bottle", "default_quantity": 1},
+            
+            # Fresh Produce (commonly found at Indian stores)
+            {"id": "ig-42", "name": "Fresh Cilantro Bunch", "category": "Produce", "store": "Indian Groceries", "price": 0.99, "unit": "bunch", "default_quantity": 2},
+            {"id": "ig-43", "name": "Fresh Mint Bunch", "category": "Produce", "store": "Indian Groceries", "price": 0.99, "unit": "bunch", "default_quantity": 1},
+            {"id": "ig-44", "name": "Green Chillies", "category": "Produce", "store": "Indian Groceries", "price": 1.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-45", "name": "Ginger Root", "category": "Produce", "store": "Indian Groceries", "price": 2.99, "unit": "lb", "default_quantity": 1},
+            {"id": "ig-46", "name": "Bitter Gourd (Karela)", "category": "Produce", "store": "Indian Groceries", "price": 2.99, "unit": "lb", "default_quantity": 1},
+            {"id": "ig-47", "name": "Okra (Bhindi)", "category": "Produce", "store": "Indian Groceries", "price": 3.99, "unit": "lb", "default_quantity": 1},
+            {"id": "ig-48", "name": "Drumsticks", "category": "Produce", "store": "Indian Groceries", "price": 2.49, "unit": "bunch", "default_quantity": 1},
+            {"id": "ig-49", "name": "Methi (Fenugreek Leaves)", "category": "Produce", "store": "Indian Groceries", "price": 1.99, "unit": "bunch", "default_quantity": 1},
+            {"id": "ig-50", "name": "Tindora (Ivy Gourd)", "category": "Produce", "store": "Indian Groceries", "price": 3.49, "unit": "lb", "default_quantity": 1},
+        ]
 
     def _load_from_hub(self):
         """Load catalog from HuggingFace Hub"""
@@ -213,7 +299,8 @@ class GroceryManager:
         self.stores = {
             "Trader Joe's": [],
             "Safeway": [],
-            "Costco": []
+            "Costco": [],
+            "Indian Groceries": []
         }
         
         # Populate Trader Joe's items
@@ -361,10 +448,80 @@ class GroceryManager:
             {"id": "co-30", "name": "Honey 5 lbs", "category": "Bulk Pantry", "store": "Costco", "price": 13.99, "unit": "jar", "default_quantity": 1},
         ]
         
+        # Populate Indian Groceries items
+        indian_groceries_items = [
+            # Spices & Masalas
+            {"id": "ig-1", "name": "Garam Masala", "category": "Spices", "store": "Indian Groceries", "price": 4.99, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-2", "name": "Turmeric Powder", "category": "Spices", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-3", "name": "Cumin Seeds", "category": "Spices", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-4", "name": "Coriander Powder", "category": "Spices", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-5", "name": "Red Chili Powder", "category": "Spices", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-6", "name": "Mustard Seeds", "category": "Spices", "store": "Indian Groceries", "price": 2.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-7", "name": "Curry Leaves", "category": "Spices", "store": "Indian Groceries", "price": 1.99, "unit": "bunch", "default_quantity": 1},
+            {"id": "ig-8", "name": "Asafoetida (Hing)", "category": "Spices", "store": "Indian Groceries", "price": 5.99, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-9", "name": "Cardamom Pods", "category": "Spices", "store": "Indian Groceries", "price": 6.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-10", "name": "Fenugreek Seeds", "category": "Spices", "store": "Indian Groceries", "price": 2.49, "unit": "package", "default_quantity": 1},
+            
+            # Rice & Grains
+            {"id": "ig-11", "name": "Basmati Rice 10lb", "category": "Rice & Grains", "store": "Indian Groceries", "price": 15.99, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-12", "name": "Toor Dal (Split Pigeon Peas)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 4.99, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-13", "name": "Moong Dal (Yellow Lentils)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 4.49, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-14", "name": "Chana Dal (Split Chickpeas)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 3.99, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-15", "name": "Urad Dal (Black Gram)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 4.99, "unit": "bag", "default_quantity": 1},
+            {"id": "ig-16", "name": "Poha (Flattened Rice)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-17", "name": "Rava (Semolina)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-18", "name": "Besan (Chickpea Flour)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 3.99, "unit": "bag", "default_quantity": 1},
+            
+            # Ready to Eat / Frozen
+            {"id": "ig-19", "name": "MTR Ready to Eat Paneer Butter Masala", "category": "Ready to Eat", "store": "Indian Groceries", "price": 3.99, "unit": "package", "default_quantity": 2},
+            {"id": "ig-20", "name": "Haldiram's Samosas (Frozen)", "category": "Frozen", "store": "Indian Groceries", "price": 5.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-21", "name": "Paratha (Frozen)", "category": "Frozen", "store": "Indian Groceries", "price": 4.49, "unit": "package", "default_quantity": 2},
+            {"id": "ig-22", "name": "Idli/Dosa Batter", "category": "Frozen", "store": "Indian Groceries", "price": 4.99, "unit": "container", "default_quantity": 1},
+            {"id": "ig-23", "name": "Paneer (Indian Cottage Cheese)", "category": "Dairy", "store": "Indian Groceries", "price": 5.99, "unit": "block", "default_quantity": 1},
+            {"id": "ig-24", "name": "Gulab Jamun Mix", "category": "Ready to Eat", "store": "Indian Groceries", "price": 3.49, "unit": "box", "default_quantity": 1},
+            
+            # Pickles & Chutneys
+            {"id": "ig-25", "name": "Mango Pickle", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 4.49, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-26", "name": "Lime Pickle", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 3.99, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-27", "name": "Tamarind Chutney", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 2.99, "unit": "bottle", "default_quantity": 1},
+            {"id": "ig-28", "name": "Mint Chutney", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 2.99, "unit": "bottle", "default_quantity": 1},
+            
+            # Snacks
+            {"id": "ig-29", "name": "Haldiram's Bhujia", "category": "Snacks", "store": "Indian Groceries", "price": 4.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-30", "name": "Chakli (Murukku)", "category": "Snacks", "store": "Indian Groceries", "price": 3.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-31", "name": "Mathri", "category": "Snacks", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-32", "name": "Khakhra", "category": "Snacks", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-33", "name": "Papad (Papadum)", "category": "Snacks", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
+            
+            # Beverages & Sweets
+            {"id": "ig-34", "name": "Chai Masala", "category": "Beverages", "store": "Indian Groceries", "price": 4.99, "unit": "package", "default_quantity": 1},
+            {"id": "ig-35", "name": "Rooh Afza", "category": "Beverages", "store": "Indian Groceries", "price": 5.99, "unit": "bottle", "default_quantity": 1},
+            {"id": "ig-36", "name": "Mango Pulp (Kesar)", "category": "Beverages", "store": "Indian Groceries", "price": 3.99, "unit": "can", "default_quantity": 2},
+            {"id": "ig-37", "name": "Kaju Katli", "category": "Sweets", "store": "Indian Groceries", "price": 9.99, "unit": "box", "default_quantity": 1},
+            {"id": "ig-38", "name": "Soan Papdi", "category": "Sweets", "store": "Indian Groceries", "price": 4.99, "unit": "box", "default_quantity": 1},
+            
+            # Oils & Ghee
+            {"id": "ig-39", "name": "Pure Ghee", "category": "Oils & Ghee", "store": "Indian Groceries", "price": 12.99, "unit": "jar", "default_quantity": 1},
+            {"id": "ig-40", "name": "Mustard Oil", "category": "Oils & Ghee", "store": "Indian Groceries", "price": 6.99, "unit": "bottle", "default_quantity": 1},
+            {"id": "ig-41", "name": "Coconut Oil", "category": "Oils & Ghee", "store": "Indian Groceries", "price": 7.99, "unit": "bottle", "default_quantity": 1},
+            
+            # Fresh Produce (commonly found at Indian stores)
+            {"id": "ig-42", "name": "Fresh Cilantro Bunch", "category": "Produce", "store": "Indian Groceries", "price": 0.99, "unit": "bunch", "default_quantity": 2},
+            {"id": "ig-43", "name": "Fresh Mint Bunch", "category": "Produce", "store": "Indian Groceries", "price": 0.99, "unit": "bunch", "default_quantity": 1},
+            {"id": "ig-44", "name": "Green Chillies", "category": "Produce", "store": "Indian Groceries", "price": 1.49, "unit": "package", "default_quantity": 1},
+            {"id": "ig-45", "name": "Ginger Root", "category": "Produce", "store": "Indian Groceries", "price": 2.99, "unit": "lb", "default_quantity": 1},
+            {"id": "ig-46", "name": "Bitter Gourd (Karela)", "category": "Produce", "store": "Indian Groceries", "price": 2.99, "unit": "lb", "default_quantity": 1},
+            {"id": "ig-47", "name": "Okra (Bhindi)", "category": "Produce", "store": "Indian Groceries", "price": 3.99, "unit": "lb", "default_quantity": 1},
+            {"id": "ig-48", "name": "Drumsticks", "category": "Produce", "store": "Indian Groceries", "price": 2.49, "unit": "bunch", "default_quantity": 1},
+            {"id": "ig-49", "name": "Methi (Fenugreek Leaves)", "category": "Produce", "store": "Indian Groceries", "price": 1.99, "unit": "bunch", "default_quantity": 1},
+            {"id": "ig-50", "name": "Tindora (Ivy Gourd)", "category": "Produce", "store": "Indian Groceries", "price": 3.49, "unit": "lb", "default_quantity": 1},
+        ]
+        
         # Add items to respective stores
         self.stores["Trader Joe's"] = trader_joes_items
         self.stores["Safeway"] = safeway_items
         self.stores["Costco"] = costco_items
+        self.stores["Indian Groceries"] = indian_groceries_items
 
     # ============================================
     # PUBLIC API METHODS
