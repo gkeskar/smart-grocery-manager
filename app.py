@@ -485,14 +485,8 @@ def build_store_tab(store_name):
     
     gr.Markdown(f"## 🛒 {store_name}")
     
-    # Status message at TOP - always visible without scrolling
-    status_message = gr.HTML(
-        value="",
-        visible=True
-    )
-    
     # ═══════════════════════════════════════════════════════════════
-    # MOBILE-FRIENDLY LAYOUT: Shopping List first on mobile (column-reverse CSS)
+    # MOBILE-FRIENDLY LAYOUT: Catalog → Add Button → Shopping List → Catalog Management
     # ═══════════════════════════════════════════════════════════════
     
     with gr.Row():
@@ -550,12 +544,10 @@ def build_store_tab(store_name):
                 interactive=False
             )
             
-            with gr.Row(elem_classes="compact-button-row"):
-                clear_selections_btn = gr.Button("✗ Clear", variant="secondary", size="sm", scale=1, min_width=0)
+            with gr.Row():
+                clear_selections_btn = gr.Button("✗ Clear Selections", variant="secondary", size="sm", scale=1)
                 # ADD TO LIST BUTTON - Right next to catalog for easy mobile access
-                add_to_list_btn = gr.Button("➕ Add", variant="primary", size="lg", scale=2, min_width=0)
-                # DELETE FROM CATALOG - supports multiple selections
-                delete_from_catalog_btn = gr.Button("🗑️ Del", variant="stop", size="sm", scale=1, min_width=0)
+                add_to_list_btn = gr.Button("➕ Add to List", variant="primary", size="lg", scale=2)
         
         # RIGHT COLUMN: SHOPPING LIST
         with gr.Column(scale=1):
@@ -569,14 +561,13 @@ def build_store_tab(store_name):
                 show_label=False
             )
             
-            # Category filter (collapsed by default)
-            with gr.Accordion("🏷️ Filter by Category", open=False):
-                shopping_list_category_filter = gr.Radio(
-                    choices=get_categories(store_name),
-                    value="All Categories",
-                    label="",
-                    interactive=True
-                )
+            # Category filter
+            shopping_list_category_filter = gr.Radio(
+                choices=get_categories(store_name),
+                value="All Categories",
+                label="Filter by Category",
+                interactive=True
+            )
             
             # Helper to get shopping list as checkbox choices
             def get_shopping_list_choices(category="All Categories", sort_by="Name (A-Z)"):
@@ -598,35 +589,17 @@ def build_store_tab(store_name):
                 return [f"{item['name']} (qty: {item['quantity']})" for item in store_items]
             
             # Action buttons at TOP for easy access
-            with gr.Row(elem_classes="compact-button-row"):
-                refresh_list_btn = gr.Button("🔄", variant="secondary", scale=1, min_width=0)
-                decrease_qty_btn = gr.Button("➖", variant="secondary", scale=1, min_width=0)
-                increase_qty_btn = gr.Button("➕", variant="secondary", scale=1, min_width=0)
-                remove_from_list_btn = gr.Button("🗑️", variant="stop", scale=1, min_width=0)
-            
-            # Empty state message (shown when list is empty)
-            def is_list_empty():
-                store_items = [item for item in grocery_manager.shopping_list if item.get("store") == store_name]
-                return len(store_items) == 0
-            
-            empty_list_message = gr.HTML(
-                value="""
-                <div style="text-align: center; padding: 40px 20px; background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%); border-radius: 12px; margin: 10px 0;">
-                    <div style="font-size: 48px; margin-bottom: 16px;">🛒</div>
-                    <div style="font-size: 18px; font-weight: 600; color: #333; margin-bottom: 8px;">Your list is empty!</div>
-                    <div style="font-size: 14px; color: #666;">Add items from the catalog above</div>
-                </div>
-                """,
-                visible=is_list_empty()
-            )
+            with gr.Row():
+                decrease_qty_btn = gr.Button("➖", variant="secondary", scale=1, min_width=50)
+                increase_qty_btn = gr.Button("➕", variant="secondary", scale=1, min_width=50)
+                remove_from_list_btn = gr.Button("🗑️", variant="stop", scale=1, min_width=50)
             
             # Shopping list as checkboxes (mobile-friendly!)
             shopping_list_checkboxes = gr.CheckboxGroup(
                 choices=get_shopping_list_choices(),
                 value=[],
                 label="📋 Tap item, then use buttons above",
-                interactive=True,
-                visible=not is_list_empty()
+                interactive=True
             )
             
             list_total = gr.Textbox(
@@ -639,9 +612,7 @@ def build_store_tab(store_name):
             update_quantity_input = gr.Number(value=1, visible=False)
             update_quantity_btn = gr.Button("Update", visible=False)
             
-            with gr.Row(elem_classes="compact-button-row"):
-                email_button = gr.Button("📧 Email", variant="primary", scale=1, min_width=0)
-                archive_list_btn = gr.Button("📦 Archive", variant="secondary", scale=1, min_width=0)
+            email_button = gr.Button("📧 Email List", variant="primary")
     
     # ═══════════════════════════════════════════════════════════════
     # CATALOG MANAGEMENT - In collapsible accordions (rarely used)
@@ -662,8 +633,8 @@ def build_store_tab(store_name):
         )
         add_catalog_btn = gr.Button("➕ Add to Catalog", variant="primary")
     
-    with gr.Accordion("✏️ Edit Catalog Item", open=False):
-        gr.Markdown("*Select an item from the catalog above to edit its details*")
+    with gr.Accordion("✏️ Edit/Delete Catalog Item", open=False):
+        gr.Markdown("*Click on a row in the catalog above to select an item for editing*")
         with gr.Row():
             edit_item_name = gr.Textbox(label="Name", placeholder="Select item first", scale=2)
             edit_item_price = gr.Number(label="Price", value=0, minimum=0, step=0.01, scale=1)
@@ -677,43 +648,12 @@ def build_store_tab(store_name):
             update_catalog_btn = gr.Button("💾 Save Changes", variant="primary", scale=1)
             delete_catalog_btn = gr.Button("🗑️ Delete Item", variant="stop", scale=1)
     
-    # Status messages are now at the top of the tab (moved above)
+    # Status messages
+    status_message = gr.Textbox(label="Status", show_label=False, placeholder="")
     
     # ═══════════════════════════════════════════════════════════════
     # EVENT HANDLERS
     # ═══════════════════════════════════════════════════════════════
-    
-    # Helper to format status messages as prominent HTML
-    def format_status(msg):
-        """Format status message as HTML with appropriate styling"""
-        if not msg:
-            return ""
-        
-        # Determine color based on message type
-        if msg.startswith("✅") or msg.startswith("🗑️") or "Restored" in msg or "Archived" in msg:
-            bg_color = "#d4edda"
-            border_color = "#28a745"
-            text_color = "#155724"
-        elif msg.startswith("❌"):
-            bg_color = "#f8d7da"
-            border_color = "#dc3545"
-            text_color = "#721c24"
-        elif msg.startswith("⚠️"):
-            bg_color = "#fff3cd"
-            border_color = "#ffc107"
-            text_color = "#856404"
-        else:
-            bg_color = "#d1ecf1"
-            border_color = "#17a2b8"
-            text_color = "#0c5460"
-        
-        return f'''
-        <div style="padding: 12px 16px; margin: 8px 0; border-radius: 8px; 
-                    background-color: {bg_color}; border-left: 4px solid {border_color};
-                    color: {text_color}; font-weight: 500;">
-            {msg}
-        </div>
-        '''
     
     # Helper function for checkmark column (deprecated - using CheckboxGroups now)
     def add_checkmark_column(df, selected_ids):
@@ -771,14 +711,13 @@ def build_store_tab(store_name):
         """Filter shopping list - returns checkbox choices (sorted by name)"""
         choices = get_shopping_list_choices(category, "Name (A-Z)")
         filtered_total = get_filtered_total(category)
-        is_empty = len(choices) == 0
-        return gr.HTML(visible=is_empty), gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty), filtered_total
+        return gr.CheckboxGroup(choices=choices, value=[]), filtered_total
     
     # Category filter triggers refresh
     shopping_list_category_filter.change(
         fn=filter_shopping_list,
         inputs=[shopping_list_category_filter],
-        outputs=[empty_list_message, shopping_list_checkboxes, list_total]
+        outputs=[shopping_list_checkboxes, list_total]
     )
     
     # Update display when catalog checkboxes change
@@ -846,21 +785,12 @@ def build_store_tab(store_name):
         filtered_total = get_filtered_total(list_category_filter)
         
         # Clear catalog selections, update shopping list
-        is_empty = len(shopping_choices) == 0
-        return (
-            format_status(success_msg), 
-            gr.CheckboxGroup(choices=catalog_choices, value=[]), 
-            gr.HTML(visible=is_empty),  # Empty message
-            gr.CheckboxGroup(choices=shopping_choices, value=[], visible=not is_empty), 
-            filtered_total, 
-            "No items selected", 
-            get_summary_text()
-        )
+        return success_msg, gr.CheckboxGroup(choices=catalog_choices, value=[]), gr.CheckboxGroup(choices=shopping_choices, value=[]), filtered_total, "No items selected", get_summary_text()
     
     add_to_list_btn.click(
         fn=add_to_list_handler,
         inputs=[catalog_checkboxes, category_filter, shopping_list_category_filter],
-        outputs=[status_message, catalog_checkboxes, empty_list_message, shopping_list_checkboxes, list_total, selected_catalog_items_display, summary_display]
+        outputs=[status_message, catalog_checkboxes, shopping_list_checkboxes, list_total, selected_catalog_items_display, summary_display]
     )
     
     # Remove from List button - now handles multi-select
@@ -869,8 +799,7 @@ def build_store_tab(store_name):
         # Check if any items are selected
         if not selected_items or len(selected_items) == 0:
             choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
-            is_empty = len(choices) == 0
-            return format_status("❌ Please select items to delete"), gr.HTML(visible=is_empty), gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty), get_filtered_total(list_category_filter), get_summary_text()
+            return "❌ Please select items to delete", gr.CheckboxGroup(choices=choices, value=[]), get_filtered_total(list_category_filter), get_summary_text()
         
         # Remove all selected items
         removed_names = []
@@ -888,19 +817,18 @@ def build_store_tab(store_name):
         # Get updated checkbox choices
         choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
         filtered_total = get_filtered_total(list_category_filter)
-        is_empty = len(choices) == 0
         
         if len(removed_names) == 1:
             msg = f"🗑️ Removed {removed_names[0]}"
         else:
             msg = f"🗑️ Removed {len(removed_names)} items"
         
-        return format_status(msg), gr.HTML(visible=is_empty), gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty), filtered_total, get_summary_text()
+        return msg, gr.CheckboxGroup(choices=choices, value=[]), filtered_total, get_summary_text()
     
     remove_from_list_btn.click(
         fn=remove_from_list_handler,
         inputs=[shopping_list_checkboxes, shopping_list_category_filter],
-        outputs=[status_message, empty_list_message, shopping_list_checkboxes, list_total, summary_display]
+        outputs=[status_message, shopping_list_checkboxes, list_total, summary_display]
     )
     
     # Hidden update quantity handler (legacy, button is hidden)
@@ -997,56 +925,11 @@ def build_store_tab(store_name):
         outputs=[status_message, shopping_list_checkboxes, list_total, summary_display]
     )
     
-    # Refresh shopping list (useful after restoring from archive)
-    def refresh_shopping_list(list_category_filter):
-        """Refresh the shopping list display"""
-        choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
-        filtered_total = get_filtered_total(list_category_filter)
-        is_empty = len(choices) == 0
-        return (
-            gr.HTML(visible=is_empty),  # Show empty message when empty
-            gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty),  # Hide checkboxes when empty
-            filtered_total, 
-            get_summary_text()
-        )
-    
-    refresh_list_btn.click(
-        fn=refresh_shopping_list,
-        inputs=[shopping_list_category_filter],
-        outputs=[empty_list_message, shopping_list_checkboxes, list_total, summary_display]
-    )
-    
     # Email list
-    def email_and_format():
-        result = send_shopping_list_email(store_name)
-        return format_status(result)
-    
     email_button.click(
-        fn=email_and_format,
+        fn=lambda: send_shopping_list_email(store_name),
         inputs=[],
         outputs=[status_message]
-    )
-    
-    # Archive and start new list (per-store)
-    def archive_and_refresh(list_category_filter):
-        """Archive this store's list and refresh shopping list display"""
-        success, msg = grocery_manager.archive_and_restart(store_name)  # Pass store name
-        # Refresh shopping list (now empty for this store)
-        choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
-        filtered_total = get_filtered_total(list_category_filter)
-        is_empty = len(choices) == 0
-        return (
-            format_status(msg),  # Prominent styled status at top
-            gr.HTML(visible=is_empty),  # Show empty message
-            gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty),  # Hide checkboxes when empty
-            filtered_total, 
-            get_summary_text()
-        )
-    
-    archive_list_btn.click(
-        fn=archive_and_refresh,
-        inputs=[shopping_list_category_filter],
-        outputs=[status_message, empty_list_message, shopping_list_checkboxes, list_total, summary_display]
     )
     
     # Add new item to catalog
@@ -1143,13 +1026,6 @@ def build_store_tab(store_name):
         outputs=[status_message, catalog_checkboxes, selected_catalog_items_display]
     )
     
-    # Also connect the new delete button in the catalog section (same handler)
-    delete_from_catalog_btn.click(
-        fn=delete_selected_catalog_items,
-        inputs=[catalog_checkboxes, category_filter],
-        outputs=[status_message, catalog_checkboxes, selected_catalog_items_display]
-    )
-    
     # Clear all selections button
     def clear_all_selections(current_filter):
         choices = get_catalog_choices(current_filter, "")
@@ -1167,9 +1043,7 @@ def build_store_tab(store_name):
 # Mobile-friendly CSS
 MOBILE_CSS = """
 /* Hide footer */
-footer {
-    display: none !important;
-}
+footer {visibility: hidden}
 
 /* ═══════════════════════════════════════════════════════════════
    CHECKBOX ITEMS - Bottom Dividers Style
@@ -1428,17 +1302,16 @@ table tbody tr:hover {
 
 /* Mobile responsive layout */
 @media (max-width: 768px) {
-    /* Stack columns vertically - BUT NOT button rows */
-    /* Use column-reverse so Shopping List appears FIRST on mobile */
-    .row:not(.compact-button-row) {
-        flex-direction: column-reverse !important;
+    /* Stack columns vertically */
+    .row {
+        flex-direction: column !important;
     }
     
-    /* Touch targets for regular buttons */
+    /* Larger touch targets for buttons */
     button {
-        min-height: 40px !important;
-        font-size: 14px !important;
-        padding: 6px 10px !important;
+        min-height: 48px !important;
+        font-size: 16px !important;
+        padding: 12px 16px !important;
     }
     
     /* Prevent zoom on input focus (iOS) */
@@ -1464,38 +1337,6 @@ table tbody tr:hover {
         font-size: 14px !important;
     }
     
-    /* Compact button row - FORCE horizontal layout on mobile */
-    .compact-button-row {
-        display: flex !important;
-        flex-direction: row !important;
-        gap: 4px !important;
-        flex-wrap: nowrap !important;
-        overflow-x: auto !important;
-        padding: 2px 0 !important;
-        justify-content: stretch !important;
-        width: 100% !important;
-        margin: 0 !important;
-    }
-
-    .compact-button-row > div,
-    .compact-button-row > .column {
-        flex: 1 1 0 !important;
-        max-width: none !important;
-        min-width: 0 !important;
-        padding: 0 !important;
-        width: auto !important;
-    }
-
-    .compact-button-row button {
-        flex: 1 1 0 !important;
-        min-width: 0 !important;
-        width: 100% !important;
-        padding: 6px 2px !important;
-        font-size: 14px !important;
-        min-height: 36px !important;
-        height: 36px !important;
-    }
-
     /* Full width columns on mobile */
     .column {
         width: 100% !important;
@@ -1757,198 +1598,6 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                     ig_budget_spent, ig_budget_limit, ig_budget_status,
                     budget_status, budget_warning, budget_progress
                 ]
-            )
-        
-        # Archive & History Tab
-        with gr.Tab("📊 History"):
-            gr.Markdown("## 📊 Shopping History & Analytics")
-            gr.Markdown("*Use the 📦 Archive button on each store's tab to save shopping trips here.*")
-            
-            with gr.Row():
-                refresh_archives_btn = gr.Button("🔄 Refresh History", variant="primary")
-            
-            gr.Markdown("---")
-            
-            # Archived lists display as checkboxes (mobile-friendly)
-            gr.Markdown("### 📋 Past Shopping Trips")
-            
-            # Action buttons at top (compact row for mobile)
-            with gr.Row(elem_classes="compact-button-row"):
-                restore_btn = gr.Button("♻️ Restore", variant="secondary", scale=1, min_width=0)
-                delete_archive_btn = gr.Button("🗑️ Delete", variant="stop", scale=1, min_width=0)
-            
-            # Confirmation checkbox (hidden by default, shown when needed)
-            confirm_replace = gr.Checkbox(
-                label="⚠️ I understand this will replace my current list",
-                value=False,
-                visible=False
-            )
-            
-            archive_action_status = gr.Textbox(label="", value="", show_label=False)
-            
-            # Archives as checkboxes
-            def get_archive_choices():
-                """Get archives as checkbox choices"""
-                archives = grocery_manager.get_archived_lists()
-                if not archives:
-                    return []
-                choices = []
-                for i, archive in enumerate(archives):
-                    store = archive.get('store', 'Unknown')
-                    date = archive.get('date_label', 'Unknown')
-                    items = archive.get('item_count', 0)
-                    total = archive.get('total_cost', 0)
-                    choices.append(f"{i+1}. {store} - {date} ({items} items, ${total:.2f})")
-                return choices
-            
-            archived_lists_checkboxes = gr.CheckboxGroup(
-                choices=get_archive_choices(),
-                value=[],
-                label="Select archive(s) to restore or delete",
-                interactive=True
-            )
-            
-            gr.Markdown("---")
-            
-            # Analytics section
-            gr.Markdown("### 📊 Shopping Analytics")
-            
-            with gr.Row():
-                with gr.Column():
-                    analytics_total_trips = gr.Textbox(label="Total Trips Archived", interactive=False)
-                    analytics_total_spent = gr.Textbox(label="Total Spent", interactive=False)
-                    analytics_avg_trip = gr.Textbox(label="Average Per Trip", interactive=False)
-                
-                with gr.Column():
-                    analytics_by_store = gr.Textbox(label="Spending by Store", lines=4, interactive=False)
-            
-            gr.Markdown("#### 🏆 Top 10 Most Purchased Items")
-            top_items_display = gr.Dataframe(
-                headers=["Item", "Total Quantity"],
-                datatype=["str", "number"],
-                col_count=(2, "fixed"),
-                interactive=False,
-                row_count=10
-            )
-            
-            # Event handlers for Archive tab
-            def get_analytics():
-                summary = grocery_manager.get_archive_summary()
-                if not summary:
-                    return "0", "$0.00", "$0.00", "No data yet", []
-                
-                # Format store totals
-                store_lines = []
-                for store, total in summary.get('store_totals', {}).items():
-                    store_lines.append(f"{store}: ${total:.2f}")
-                store_text = "\n".join(store_lines) if store_lines else "No data"
-                
-                # Format top items
-                top_items = [[name, qty] for name, qty in summary.get('top_items', [])]
-                
-                return (
-                    str(summary.get('total_archives', 0)),
-                    f"${summary.get('total_spent', 0):.2f}",
-                    f"${summary.get('avg_per_trip', 0):.2f}",
-                    store_text,
-                    top_items
-                )
-            
-            def extract_archive_index(selected_items):
-                """Extract archive index from selected checkbox item"""
-                if not selected_items or len(selected_items) == 0:
-                    return None
-                # Get first selected item and extract index from "1. Store - Date..."
-                selected = selected_items[0]
-                try:
-                    index = int(selected.split(".")[0]) - 1
-                    return index
-                except:
-                    return None
-            
-            def do_restore(selected_items, confirmed):
-                index = extract_archive_index(selected_items)
-                if index is None:
-                    return "❌ Please select an archive first", gr.CheckboxGroup(choices=get_archive_choices(), value=[]), gr.Checkbox(visible=False, value=False)
-                
-                # Get the store from the archive
-                archives = grocery_manager.get_archived_lists()
-                if index >= len(archives):
-                    return "❌ Invalid archive", gr.CheckboxGroup(choices=get_archive_choices(), value=[]), gr.Checkbox(visible=False, value=False)
-                
-                store = archives[index].get('store', 'Unknown')
-                existing_count = grocery_manager.get_store_item_count(store)
-                
-                # If there are existing items and user hasn't confirmed, show confirmation
-                if existing_count > 0 and not confirmed:
-                    return f"⚠️ You have {existing_count} items in {store}. Check the box below and tap Restore again to replace them.", gr.CheckboxGroup(choices=get_archive_choices(), value=selected_items), gr.Checkbox(visible=True, value=False, label=f"⚠️ Replace {existing_count} items in {store}")
-                
-                # Do the restore (always replaces)
-                success, msg = grocery_manager.restore_from_archive(index)
-                if success:
-                    return f"{msg} — Go to {store} tab and tap 🔄 to see items", gr.CheckboxGroup(choices=get_archive_choices(), value=[]), gr.Checkbox(visible=False, value=False)
-                return msg, gr.CheckboxGroup(choices=get_archive_choices(), value=[]), gr.Checkbox(visible=False, value=False)
-            
-            def do_delete(selected_items):
-                if not selected_items or len(selected_items) == 0:
-                    return "❌ Please select archive(s) to delete", gr.CheckboxGroup(choices=get_archive_choices(), value=[])
-                
-                # Extract all selected indices
-                indices = []
-                for selected in selected_items:
-                    try:
-                        index = int(selected.split(".")[0]) - 1
-                        indices.append(index)
-                    except:
-                        pass
-                
-                if not indices:
-                    return "❌ Could not parse selected archives", gr.CheckboxGroup(choices=get_archive_choices(), value=[])
-                
-                # Delete multiple archives
-                success, msg = grocery_manager.delete_multiple_archives(indices)
-                
-                # Refresh the checkbox choices after delete
-                new_choices = get_archive_choices()
-                return msg, gr.CheckboxGroup(choices=new_choices, value=[])
-            
-            def refresh_all_archive_data():
-                choices = get_archive_choices()
-                trips, spent, avg, stores, top = get_analytics()
-                return gr.CheckboxGroup(choices=choices, value=[]), "", gr.Checkbox(visible=False, value=False), trips, spent, avg, stores, top
-            
-            refresh_archives_btn.click(
-                fn=refresh_all_archive_data,
-                inputs=[],
-                outputs=[archived_lists_checkboxes, archive_action_status, confirm_replace, 
-                         analytics_total_trips, analytics_total_spent,
-                         analytics_avg_trip, analytics_by_store, top_items_display]
-            )
-            
-            restore_btn.click(
-                fn=do_restore,
-                inputs=[archived_lists_checkboxes, confirm_replace],
-                outputs=[archive_action_status, archived_lists_checkboxes, confirm_replace]
-            )
-            
-            delete_archive_btn.click(
-                fn=do_delete,
-                inputs=[archived_lists_checkboxes],
-                outputs=[archive_action_status, archived_lists_checkboxes]
-            ).then(
-                fn=get_analytics,
-                inputs=[],
-                outputs=[analytics_total_trips, analytics_total_spent, analytics_avg_trip, 
-                         analytics_by_store, top_items_display]
-            )
-            
-            # Load archives on page load
-            demo.load(
-                fn=refresh_all_archive_data,
-                inputs=[],
-                outputs=[archived_lists_checkboxes, archive_action_status, confirm_replace,
-                         analytics_total_trips, analytics_total_spent,
-                         analytics_avg_trip, analytics_by_store, top_items_display]
             )
         
         # Settings Tab
