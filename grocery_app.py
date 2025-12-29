@@ -2,6 +2,10 @@ import json
 import os
 import threading
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# Timezone for timestamps (Pacific Time)
+TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 # HuggingFace Hub imports
 try:
@@ -31,6 +35,10 @@ class GroceryManager:
             "Indian Groceries": 100.0  # Weekly
         }
         self.email_address = "gandhali.aradhye@gmail.com"  # Default email
+        
+        # Archived shopping lists (up to 6, rotating)
+        self.archived_lists = []
+        self.max_archives = 6
         
         # Debouncing for saves (avoid too many API calls)
         self._save_pending = False
@@ -156,6 +164,7 @@ class GroceryManager:
                 self.budget = data.get('budget', 650.0)
                 self.store_budgets = data.get('store_budgets', self.store_budgets)
                 self.email_address = data.get('email_address', self.email_address)
+                self.archived_lists = data.get('archived_lists', [])
             
             print(f"✅ Data loaded from HuggingFace Hub!")
             print(f"   📦 Stores: {len(self.stores)}")
@@ -186,7 +195,8 @@ class GroceryManager:
                 'budget': self.budget,
                 'store_budgets': self.store_budgets,
                 'email_address': self.email_address,
-                'last_updated': datetime.now().isoformat()
+                'archived_lists': self.archived_lists,
+                'last_updated': datetime.now(TIMEZONE).isoformat()
             }
             
             # Save locally first (as backup)
@@ -201,7 +211,7 @@ class GroceryManager:
                 repo_id=self.hf_repo,
                 repo_type="dataset",
                 token=self.hf_token,
-                commit_message=f"Auto-save: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                commit_message=f"Auto-save: {datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}"
             )
             print(f"✅ Data saved to HuggingFace Hub!")
             return True
@@ -255,6 +265,7 @@ class GroceryManager:
                         self.budget = data.get('budget', 650.0)
                         self.store_budgets = data.get('store_budgets', self.store_budgets)
                         self.email_address = data.get('email_address', self.email_address)
+                        self.archived_lists = data.get('archived_lists', [])
                     else:
                         # Old format - just stores dict
                         self.stores = data
@@ -277,7 +288,8 @@ class GroceryManager:
                 'budget': self.budget,
                 'store_budgets': self.store_budgets,
                 'email_address': self.email_address,
-                'last_updated': datetime.now().isoformat()
+                'archived_lists': self.archived_lists,
+                'last_updated': datetime.now(TIMEZONE).isoformat()
             }
             with open(self.catalog_file, 'w') as f:
                 json.dump(data, f, indent=2)
@@ -648,3 +660,156 @@ class GroceryManager:
                     self._schedule_save()
                     return True
         return False
+
+    # ============================================
+    # ARCHIVE METHODS
+    # ============================================
+    
+    def archive_and_restart(self, store_name=None):
+        """Archive shopping list for a specific store and start fresh for that store.
+        
+        Args:
+            store_name: Name of the store to archive. If None, archives all stores.
+        """
+        # Filter items by store if specified
+        if store_name:
+            store_items = [item for item in self.shopping_list if item.get('store') == store_name]
+        else:
+            store_items = self.shopping_list
+        
+        if not store_items:
+            return False, f"No items to archive{' for ' + store_name if store_name else ''}"
+        
+        # Calculate total for the store
+        total_cost = sum(item['price'] * item['quantity'] for item in store_items)
+        
+        # Create archive entry (per-store)
+        archive_entry = {
+            'date': datetime.now(TIMEZONE).isoformat(),
+            'date_label': datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M'),
+            'store': store_name or 'All Stores',
+            'items': [item.copy() for item in store_items],
+            'item_count': len(store_items),
+            'total_cost': round(total_cost, 2)
+        }
+        
+        # Add to archives (at the beginning for newest first)
+        self.archived_lists.insert(0, archive_entry)
+        
+        # Rotate out oldest if over limit
+        if len(self.archived_lists) > self.max_archives:
+            self.archived_lists = self.archived_lists[:self.max_archives]
+        
+        # Remove only the archived store's items from shopping list
+        if store_name:
+            self.shopping_list = [item for item in self.shopping_list if item.get('store') != store_name]
+        else:
+            self.shopping_list = []
+        
+        # Force immediate save to Hub
+        self.force_save()
+        
+        return True, f"✅ Archived {archive_entry['item_count']} items from {store_name or 'all stores'} (${archive_entry['total_cost']:.2f})"
+    
+    def get_archived_lists(self):
+        """Get all archived lists for display"""
+        return self.archived_lists
+    
+    def get_archive_summary(self):
+        """Get summary statistics across all archives for analytics"""
+        if not self.archived_lists:
+            return None
+        
+        total_spent = sum(a['total_cost'] for a in self.archived_lists)
+        total_items = sum(a['item_count'] for a in self.archived_lists)
+        avg_per_trip = total_spent / len(self.archived_lists) if self.archived_lists else 0
+        
+        # Aggregate store totals
+        all_store_totals = {}
+        for archive in self.archived_lists:
+            for store, amount in archive.get('store_totals', {}).items():
+                all_store_totals[store] = all_store_totals.get(store, 0) + amount
+        
+        # Find most purchased items
+        item_counts = {}
+        for archive in self.archived_lists:
+            for item in archive.get('items', []):
+                name = item['name']
+                item_counts[name] = item_counts.get(name, 0) + item['quantity']
+        
+        # Top 10 items
+        top_items = sorted(item_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        
+        return {
+            'total_archives': len(self.archived_lists),
+            'total_spent': round(total_spent, 2),
+            'total_items': total_items,
+            'avg_per_trip': round(avg_per_trip, 2),
+            'store_totals': all_store_totals,
+            'top_items': top_items
+        }
+    
+    def restore_from_archive(self, archive_index):
+        """Restore items from an archive (replaces existing items for that store)."""
+        if archive_index < 0 or archive_index >= len(self.archived_lists):
+            return False, "Invalid archive index"
+        
+        archive = self.archived_lists[archive_index]
+        store_name = archive.get('store', None)
+        
+        # Replace mode: Remove existing items from this store first
+        if store_name:
+            self.shopping_list = [item for item in self.shopping_list if item.get('store') != store_name]
+        else:
+            self.shopping_list = []
+        
+        # Add all archived items
+        for item in archive.get('items', []):
+            self.shopping_list.append(item.copy())
+        
+        self._schedule_save()
+        return True, f"✅ Restored {len(archive.get('items', []))} items from {archive['date_label']}"
+    
+    def get_store_item_count(self, store_name):
+        """Get count of items in shopping list for a specific store"""
+        return len([item for item in self.shopping_list if item.get('store') == store_name])
+    
+    def delete_archive(self, archive_index):
+        """Delete an archive from the list"""
+        if archive_index < 0 or archive_index >= len(self.archived_lists):
+            return False, "Invalid archive index"
+        
+        archive = self.archived_lists[archive_index]
+        store = archive.get('store', 'Unknown')
+        date_label = archive.get('date_label', 'Unknown')
+        
+        # Remove the archive
+        self.archived_lists.pop(archive_index)
+        
+        # Save changes
+        self.force_save()
+        return True, f"🗑️ Deleted archive: {store} from {date_label}"
+    
+    def delete_multiple_archives(self, indices):
+        """Delete multiple archives from the list.
+        
+        Args:
+            indices: List of archive indices to delete (0-based)
+        """
+        if not indices:
+            return False, "No archives selected"
+        
+        # Sort indices in descending order so we delete from end first
+        # (to avoid index shifting issues)
+        sorted_indices = sorted(indices, reverse=True)
+        
+        deleted_count = 0
+        for index in sorted_indices:
+            if 0 <= index < len(self.archived_lists):
+                self.archived_lists.pop(index)
+                deleted_count += 1
+        
+        if deleted_count > 0:
+            self.force_save()
+            return True, f"🗑️ Deleted {deleted_count} archive(s)"
+        return False, "No valid archives found"
