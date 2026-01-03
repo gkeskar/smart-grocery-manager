@@ -264,8 +264,9 @@ def add_catalog_item(store_name, name, category, price, unit):
     }
     
     grocery_manager.stores[store_name].append(new_item)
-    grocery_manager._save_catalog()  # Persist to JSON file
-    return f"✅ Added {name_normalized} to {store_name} catalog (saved to file)"
+    grocery_manager._save_catalog()  # Save to Hub
+    # Check if save was successful by looking at stores count
+    return f"✅ Added {name_normalized} to {store_name} catalog (ID: {new_id})"
 
 def delete_catalog_item(store_name, item_id):
     """Delete an item from the store catalog"""
@@ -594,8 +595,14 @@ def build_store_tab(store_name):
                 elif sort_by == "Quantity":
                     store_items = sorted(store_items, key=lambda x: x["quantity"], reverse=True)
                 
-                # Format as "Item Name (qty: X)"
-                return [f"{item['name']} (qty: {item['quantity']})" for item in store_items]
+                # Format as "Item Name (qty: X) - $Y.YY"
+                choices = []
+                for item in store_items:
+                    qty = item['quantity']
+                    price = item.get('price', 0)
+                    total = qty * price
+                    choices.append(f"{item['name']} (qty: {qty}) - ${total:.2f}")
+                return choices
             
             # Action buttons at TOP for easy access
             with gr.Row(elem_classes="compact-button-row"):
@@ -866,36 +873,49 @@ def build_store_tab(store_name):
     # Remove from List button - now handles multi-select
     def remove_from_list_handler(selected_items, list_category_filter):
         """Remove selected items from shopping list"""
-        # Check if any items are selected
-        if not selected_items or len(selected_items) == 0:
+        try:
+            # Check if any items are selected
+            if not selected_items or len(selected_items) == 0:
+                choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
+                is_empty = len(choices) == 0
+                return format_status("❌ Please select items to delete"), gr.HTML(visible=is_empty), gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty), get_filtered_total(list_category_filter), get_summary_text()
+            
+            # Remove all selected items
+            removed_names = []
+            for selected in selected_items:
+                try:
+                    # Extract item name from "Item Name (qty: X) - $Y.YY"
+                    item_name = selected.split(" (qty:")[0].strip()
+                    
+                    # Find item ID by name
+                    for item in list(grocery_manager.shopping_list):  # Copy list to avoid modification during iteration
+                        if item.get("store") == store_name and item["name"] == item_name:
+                            remove_from_cart(item["id"])
+                            removed_names.append(item_name)
+                            break
+                except Exception as e:
+                    print(f"⚠️ Error removing item '{selected}': {e}")
+                    continue
+            
+            # Get updated checkbox choices
+            choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
+            filtered_total = get_filtered_total(list_category_filter)
+            is_empty = len(choices) == 0
+            
+            if len(removed_names) == 0:
+                msg = "⚠️ No items were removed (may have been already deleted)"
+            elif len(removed_names) == 1:
+                msg = f"🗑️ Removed {removed_names[0]}"
+            else:
+                msg = f"🗑️ Removed {len(removed_names)} items"
+            
+            return format_status(msg), gr.HTML(visible=is_empty), gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty), filtered_total, get_summary_text()
+        except Exception as e:
+            print(f"❌ Error in remove_from_list_handler: {e}")
+            # Return safe defaults
             choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
             is_empty = len(choices) == 0
-            return format_status("❌ Please select items to delete"), gr.HTML(visible=is_empty), gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty), get_filtered_total(list_category_filter), get_summary_text()
-        
-        # Remove all selected items
-        removed_names = []
-        for selected in selected_items:
-            # Extract item name from "Item Name (qty: X)"
-            item_name = selected.split(" (qty:")[0].strip()
-            
-            # Find item ID by name
-            for item in grocery_manager.shopping_list:
-                if item.get("store") == store_name and item["name"] == item_name:
-                    remove_from_cart(item["id"])
-                    removed_names.append(item_name)
-                    break
-        
-        # Get updated checkbox choices
-        choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
-        filtered_total = get_filtered_total(list_category_filter)
-        is_empty = len(choices) == 0
-        
-        if len(removed_names) == 1:
-            msg = f"🗑️ Removed {removed_names[0]}"
-        else:
-            msg = f"🗑️ Removed {len(removed_names)} items"
-        
-        return format_status(msg), gr.HTML(visible=is_empty), gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty), filtered_total, get_summary_text()
+            return format_status(f"❌ Error: {str(e)}"), gr.HTML(visible=is_empty), gr.CheckboxGroup(choices=choices, value=[], visible=not is_empty), get_filtered_total(list_category_filter), get_summary_text()
     
     remove_from_list_btn.click(
         fn=remove_from_list_handler,
@@ -940,10 +960,14 @@ def build_store_tab(store_name):
         choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
         filtered_total = get_filtered_total(list_category_filter)
         
-        # Keep item selected (with new qty)
-        new_selected = f"{item_name} (qty: {new_qty})"
+        # Find the matching choice to keep item selected (includes price now)
+        new_selected = []
+        for choice in choices:
+            if choice.startswith(f"{item_name} (qty: {new_qty})"):
+                new_selected = [choice]
+                break
         
-        return f"✅ {item_name}: {current_qty} → {new_qty}", gr.CheckboxGroup(choices=choices, value=[new_selected]), filtered_total, get_summary_text()
+        return f"✅ {item_name}: {current_qty} → {new_qty}", gr.CheckboxGroup(choices=choices, value=new_selected), filtered_total, get_summary_text()
     
     def decrease_quantity(selected_items, list_category_filter):
         """Decrement quantity by 1 (minimum 1) for first selected item"""
@@ -980,10 +1004,14 @@ def build_store_tab(store_name):
         choices = get_shopping_list_choices(list_category_filter, "Name (A-Z)")
         filtered_total = get_filtered_total(list_category_filter)
         
-        # Keep item selected (with new qty)
-        new_selected = f"{item_name} (qty: {new_qty})"
+        # Find the matching choice to keep item selected (includes price now)
+        new_selected = []
+        for choice in choices:
+            if choice.startswith(f"{item_name} (qty: {new_qty})"):
+                new_selected = [choice]
+                break
         
-        return f"✅ {item_name}: {current_qty} → {new_qty}", gr.CheckboxGroup(choices=choices, value=[new_selected]), filtered_total, get_summary_text()
+        return f"✅ {item_name}: {current_qty} → {new_qty}", gr.CheckboxGroup(choices=choices, value=new_selected), filtered_total, get_summary_text()
     
     increase_qty_btn.click(
         fn=increase_quantity,
@@ -1524,6 +1552,52 @@ input[type="number"] {
 .gr-radio {
     gap: 8px;
 }
+
+/* Store filter radio - horizontal layout that wraps on mobile */
+.store-filter-radio {
+    margin-bottom: 12px;
+}
+
+.store-filter-radio > div {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+}
+
+.store-filter-radio label {
+    flex: 0 0 auto !important;
+    padding: 8px 16px !important;
+    border: 1px solid #ddd !important;
+    border-radius: 20px !important;
+    cursor: pointer !important;
+    transition: all 0.2s ease !important;
+    min-width: fit-content !important;
+    text-align: center !important;
+    background: #f8f9fa !important;
+    font-size: 14px !important;
+}
+
+.store-filter-radio label:hover {
+    background: #e9ecef !important;
+    border-color: #adb5bd !important;
+}
+
+.store-filter-radio input:checked + span,
+.store-filter-radio label.selected,
+.store-filter-radio label:has(input:checked) {
+    background: #4CAF50 !important;
+    color: white !important;
+    border-color: #4CAF50 !important;
+}
+
+@media (max-width: 768px) {
+    .store-filter-radio label {
+        flex: 1 1 calc(50% - 8px) !important;
+        min-width: calc(50% - 8px) !important;
+        padding: 10px 8px !important;
+        font-size: 13px !important;
+    }
+}
 """
 
 # Create the Gradio interface
@@ -1772,6 +1846,21 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
             # Archived lists display as checkboxes (mobile-friendly)
             gr.Markdown("### 📋 Past Shopping Trips")
             
+            # Store filter dropdown - always include all stores
+            def get_archive_stores():
+                """Get all stores (always show all, even without archives)"""
+                # Always include these stores
+                all_stores = ["Trader Joe's", "Safeway", "Costco", "Indian Groceries"]
+                return ["All Stores"] + all_stores
+            
+            archive_store_filter = gr.Radio(
+                choices=get_archive_stores(),
+                value="All Stores",
+                label="🏪 Filter by Store",
+                interactive=True,
+                elem_classes="store-filter-radio"
+            )
+            
             # Action buttons at top (compact row for mobile)
             with gr.Row(elem_classes="compact-button-row"):
                 restore_btn = gr.Button("♻️ Restore", variant="secondary", scale=1, min_width=0)
@@ -1787,17 +1876,21 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
             archive_action_status = gr.Textbox(label="", value="", show_label=False)
             
             # Archives as checkboxes
-            def get_archive_choices():
-                """Get archives as checkbox choices"""
+            def get_archive_choices(store_filter="All Stores"):
+                """Get archives as checkbox choices, filtered by store"""
                 archives = grocery_manager.get_archived_lists()
                 if not archives:
                     return []
                 choices = []
                 for i, archive in enumerate(archives):
                     store = archive.get('store', 'Unknown')
+                    # Apply store filter
+                    if store_filter != "All Stores" and store != store_filter:
+                        continue
                     date = archive.get('date_label', 'Unknown')
                     items = archive.get('item_count', 0)
                     total = archive.get('total_cost', 0)
+                    # Include original index for restore/delete operations
                     choices.append(f"{i+1}. {store} - {date} ({items} items, ${total:.2f})")
                 return choices
             
@@ -1806,6 +1899,25 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                 value=[],
                 label="Select archive(s) to restore or delete",
                 interactive=True
+            )
+            
+            # Message shown when no archives for selected store
+            no_archives_message = gr.Markdown(
+                value="*No archived shopping trips for this store yet. Use the 📦 Archive button on the store tab to save trips.*",
+                visible=False
+            )
+            
+            # Update archive list when store filter changes
+            def update_archive_filter(store_filter):
+                choices = get_archive_choices(store_filter)
+                has_archives = len(choices) > 0
+                return (gr.CheckboxGroup(choices=choices, value=[], visible=has_archives),
+                        gr.Markdown(visible=not has_archives))
+            
+            archive_store_filter.change(
+                fn=update_archive_filter,
+                inputs=[archive_store_filter],
+                outputs=[archived_lists_checkboxes, no_archives_message]
             )
             
             gr.Markdown("---")
@@ -1889,9 +2001,9 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                     return f"{msg} — Go to {store} tab and tap 🔄 to see items", gr.CheckboxGroup(choices=get_archive_choices(), value=[]), gr.Checkbox(visible=False, value=False)
                 return msg, gr.CheckboxGroup(choices=get_archive_choices(), value=[]), gr.Checkbox(visible=False, value=False)
             
-            def do_delete(selected_items):
+            def do_delete(selected_items, store_filter):
                 if not selected_items or len(selected_items) == 0:
-                    return "❌ Please select archive(s) to delete", gr.CheckboxGroup(choices=get_archive_choices(), value=[])
+                    return "❌ Please select archive(s) to delete", gr.CheckboxGroup(choices=get_archive_choices(store_filter), value=[]), gr.Radio(choices=get_archive_stores(), value=store_filter)
                 
                 # Extract all selected indices
                 indices = []
@@ -1903,24 +2015,33 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                         pass
                 
                 if not indices:
-                    return "❌ Could not parse selected archives", gr.CheckboxGroup(choices=get_archive_choices(), value=[])
+                    return "❌ Could not parse selected archives", gr.CheckboxGroup(choices=get_archive_choices(store_filter), value=[]), gr.Radio(choices=get_archive_stores(), value=store_filter)
                 
                 # Delete multiple archives
                 success, msg = grocery_manager.delete_multiple_archives(indices)
                 
-                # Refresh the checkbox choices after delete
-                new_choices = get_archive_choices()
-                return msg, gr.CheckboxGroup(choices=new_choices, value=[])
+                # Refresh the checkbox choices and store filter after delete
+                new_choices = get_archive_choices(store_filter)
+                new_stores = get_archive_stores()
+                # If current filter no longer exists, reset to All Stores
+                if store_filter not in new_stores:
+                    store_filter = "All Stores"
+                    new_choices = get_archive_choices(store_filter)
+                return msg, gr.CheckboxGroup(choices=new_choices, value=[]), gr.Radio(choices=new_stores, value=store_filter)
             
-            def refresh_all_archive_data():
-                choices = get_archive_choices()
+            def refresh_all_archive_data(store_filter):
+                choices = get_archive_choices(store_filter)
+                store_choices = get_archive_stores()
                 trips, spent, avg, stores, top = get_analytics()
-                return gr.CheckboxGroup(choices=choices, value=[]), "", gr.Checkbox(visible=False, value=False), trips, spent, avg, stores, top
+                return (gr.Radio(choices=store_choices, value=store_filter),
+                        gr.CheckboxGroup(choices=choices, value=[]), 
+                        "", gr.Checkbox(visible=False, value=False), 
+                        trips, spent, avg, stores, top)
             
             refresh_archives_btn.click(
                 fn=refresh_all_archive_data,
-                inputs=[],
-                outputs=[archived_lists_checkboxes, archive_action_status, confirm_replace, 
+                inputs=[archive_store_filter],
+                outputs=[archive_store_filter, archived_lists_checkboxes, archive_action_status, confirm_replace, 
                          analytics_total_trips, analytics_total_spent,
                          analytics_avg_trip, analytics_by_store, top_items_display]
             )
@@ -1933,8 +2054,8 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
             
             delete_archive_btn.click(
                 fn=do_delete,
-                inputs=[archived_lists_checkboxes],
-                outputs=[archive_action_status, archived_lists_checkboxes]
+                inputs=[archived_lists_checkboxes, archive_store_filter],
+                outputs=[archive_action_status, archived_lists_checkboxes, archive_store_filter]
             ).then(
                 fn=get_analytics,
                 inputs=[],
@@ -2064,4 +2185,6 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
             )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch()# Deployed Wed Dec 31 17:45:16 PST 2025
+
+# Last updated: Wed Dec 31 17:46:34 PST 2025

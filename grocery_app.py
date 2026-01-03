@@ -53,107 +53,25 @@ class GroceryManager:
         # Try loading from HuggingFace Hub first
         if HF_HUB_AVAILABLE and self.hf_token:
             if self._load_from_hub():
-                # Check if Indian Groceries store exists, add if missing
-                self._ensure_indian_groceries_store()
+                # Merge any missing default items (e.g., new categories like Frozen)
+                self._merge_missing_defaults()
                 return
         
         # Fallback to local file
         self._load_or_initialize_local()
-        # Check if Indian Groceries store exists, add if missing
-        self._ensure_indian_groceries_store()
-    
-    def _ensure_indian_groceries_store(self):
-        """Ensure Indian Groceries store exists in the catalog"""
-        if "Indian Groceries" not in self.stores or len(self.stores.get("Indian Groceries", [])) == 0:
-            print("📦 Adding Indian Groceries store to catalog...")
-            self.stores["Indian Groceries"] = self._get_indian_groceries_items()
-            # Also ensure budget exists
-            if "Indian Groceries" not in self.store_budgets:
-                self.store_budgets["Indian Groceries"] = 100.0
-            self._schedule_save()  # Save the new store to Hub
-            print("✅ Indian Groceries store added with 50 items!")
-    
-    def _get_indian_groceries_items(self):
-        """Return the Indian Groceries sample items"""
-        return [
-            # Spices & Masalas
-            {"id": "ig-1", "name": "Garam Masala", "category": "Spices", "store": "Indian Groceries", "price": 4.99, "unit": "jar", "default_quantity": 1},
-            {"id": "ig-2", "name": "Turmeric Powder", "category": "Spices", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
-            {"id": "ig-3", "name": "Cumin Seeds", "category": "Spices", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
-            {"id": "ig-4", "name": "Coriander Powder", "category": "Spices", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
-            {"id": "ig-5", "name": "Red Chili Powder", "category": "Spices", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
-            {"id": "ig-6", "name": "Mustard Seeds", "category": "Spices", "store": "Indian Groceries", "price": 2.49, "unit": "package", "default_quantity": 1},
-            {"id": "ig-7", "name": "Curry Leaves", "category": "Spices", "store": "Indian Groceries", "price": 1.99, "unit": "bunch", "default_quantity": 1},
-            {"id": "ig-8", "name": "Asafoetida (Hing)", "category": "Spices", "store": "Indian Groceries", "price": 5.99, "unit": "jar", "default_quantity": 1},
-            {"id": "ig-9", "name": "Cardamom Pods", "category": "Spices", "store": "Indian Groceries", "price": 6.99, "unit": "package", "default_quantity": 1},
-            {"id": "ig-10", "name": "Fenugreek Seeds", "category": "Spices", "store": "Indian Groceries", "price": 2.49, "unit": "package", "default_quantity": 1},
-            
-            # Rice & Grains
-            {"id": "ig-11", "name": "Basmati Rice 10lb", "category": "Rice & Grains", "store": "Indian Groceries", "price": 15.99, "unit": "bag", "default_quantity": 1},
-            {"id": "ig-12", "name": "Toor Dal (Split Pigeon Peas)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 4.99, "unit": "bag", "default_quantity": 1},
-            {"id": "ig-13", "name": "Moong Dal (Yellow Lentils)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 4.49, "unit": "bag", "default_quantity": 1},
-            {"id": "ig-14", "name": "Chana Dal (Split Chickpeas)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 3.99, "unit": "bag", "default_quantity": 1},
-            {"id": "ig-15", "name": "Urad Dal (Black Gram)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 4.99, "unit": "bag", "default_quantity": 1},
-            {"id": "ig-16", "name": "Poha (Flattened Rice)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
-            {"id": "ig-17", "name": "Rava (Semolina)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
-            {"id": "ig-18", "name": "Besan (Chickpea Flour)", "category": "Rice & Grains", "store": "Indian Groceries", "price": 3.99, "unit": "bag", "default_quantity": 1},
-            
-            # Ready to Eat / Frozen
-            {"id": "ig-19", "name": "MTR Ready to Eat Paneer Butter Masala", "category": "Ready to Eat", "store": "Indian Groceries", "price": 3.99, "unit": "package", "default_quantity": 2},
-            {"id": "ig-20", "name": "Haldiram's Samosas (Frozen)", "category": "Frozen", "store": "Indian Groceries", "price": 5.99, "unit": "package", "default_quantity": 1},
-            {"id": "ig-21", "name": "Paratha (Frozen)", "category": "Frozen", "store": "Indian Groceries", "price": 4.49, "unit": "package", "default_quantity": 2},
-            {"id": "ig-22", "name": "Idli/Dosa Batter", "category": "Frozen", "store": "Indian Groceries", "price": 4.99, "unit": "container", "default_quantity": 1},
-            {"id": "ig-23", "name": "Paneer (Indian Cottage Cheese)", "category": "Dairy", "store": "Indian Groceries", "price": 5.99, "unit": "block", "default_quantity": 1},
-            {"id": "ig-24", "name": "Gulab Jamun Mix", "category": "Ready to Eat", "store": "Indian Groceries", "price": 3.49, "unit": "box", "default_quantity": 1},
-            
-            # Pickles & Chutneys
-            {"id": "ig-25", "name": "Mango Pickle", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 4.49, "unit": "jar", "default_quantity": 1},
-            {"id": "ig-26", "name": "Lime Pickle", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 3.99, "unit": "jar", "default_quantity": 1},
-            {"id": "ig-27", "name": "Tamarind Chutney", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 2.99, "unit": "bottle", "default_quantity": 1},
-            {"id": "ig-28", "name": "Mint Chutney", "category": "Pickles & Chutneys", "store": "Indian Groceries", "price": 2.99, "unit": "bottle", "default_quantity": 1},
-            
-            # Snacks
-            {"id": "ig-29", "name": "Haldiram's Bhujia", "category": "Snacks", "store": "Indian Groceries", "price": 4.99, "unit": "package", "default_quantity": 1},
-            {"id": "ig-30", "name": "Chakli (Murukku)", "category": "Snacks", "store": "Indian Groceries", "price": 3.99, "unit": "package", "default_quantity": 1},
-            {"id": "ig-31", "name": "Mathri", "category": "Snacks", "store": "Indian Groceries", "price": 3.49, "unit": "package", "default_quantity": 1},
-            {"id": "ig-32", "name": "Khakhra", "category": "Snacks", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
-            {"id": "ig-33", "name": "Papad (Papadum)", "category": "Snacks", "store": "Indian Groceries", "price": 2.99, "unit": "package", "default_quantity": 1},
-            
-            # Beverages & Sweets
-            {"id": "ig-34", "name": "Chai Masala", "category": "Beverages", "store": "Indian Groceries", "price": 4.99, "unit": "package", "default_quantity": 1},
-            {"id": "ig-35", "name": "Rooh Afza", "category": "Beverages", "store": "Indian Groceries", "price": 5.99, "unit": "bottle", "default_quantity": 1},
-            {"id": "ig-36", "name": "Mango Pulp (Kesar)", "category": "Beverages", "store": "Indian Groceries", "price": 3.99, "unit": "can", "default_quantity": 2},
-            {"id": "ig-37", "name": "Kaju Katli", "category": "Sweets", "store": "Indian Groceries", "price": 9.99, "unit": "box", "default_quantity": 1},
-            {"id": "ig-38", "name": "Soan Papdi", "category": "Sweets", "store": "Indian Groceries", "price": 4.99, "unit": "box", "default_quantity": 1},
-            
-            # Oils & Ghee
-            {"id": "ig-39", "name": "Pure Ghee", "category": "Oils & Ghee", "store": "Indian Groceries", "price": 12.99, "unit": "jar", "default_quantity": 1},
-            {"id": "ig-40", "name": "Mustard Oil", "category": "Oils & Ghee", "store": "Indian Groceries", "price": 6.99, "unit": "bottle", "default_quantity": 1},
-            {"id": "ig-41", "name": "Coconut Oil", "category": "Oils & Ghee", "store": "Indian Groceries", "price": 7.99, "unit": "bottle", "default_quantity": 1},
-            
-            # Fresh Produce (commonly found at Indian stores)
-            {"id": "ig-42", "name": "Fresh Cilantro Bunch", "category": "Produce", "store": "Indian Groceries", "price": 0.99, "unit": "bunch", "default_quantity": 2},
-            {"id": "ig-43", "name": "Fresh Mint Bunch", "category": "Produce", "store": "Indian Groceries", "price": 0.99, "unit": "bunch", "default_quantity": 1},
-            {"id": "ig-44", "name": "Green Chillies", "category": "Produce", "store": "Indian Groceries", "price": 1.49, "unit": "package", "default_quantity": 1},
-            {"id": "ig-45", "name": "Ginger Root", "category": "Produce", "store": "Indian Groceries", "price": 2.99, "unit": "lb", "default_quantity": 1},
-            {"id": "ig-46", "name": "Bitter Gourd (Karela)", "category": "Produce", "store": "Indian Groceries", "price": 2.99, "unit": "lb", "default_quantity": 1},
-            {"id": "ig-47", "name": "Okra (Bhindi)", "category": "Produce", "store": "Indian Groceries", "price": 3.99, "unit": "lb", "default_quantity": 1},
-            {"id": "ig-48", "name": "Drumsticks", "category": "Produce", "store": "Indian Groceries", "price": 2.49, "unit": "bunch", "default_quantity": 1},
-            {"id": "ig-49", "name": "Methi (Fenugreek Leaves)", "category": "Produce", "store": "Indian Groceries", "price": 1.99, "unit": "bunch", "default_quantity": 1},
-            {"id": "ig-50", "name": "Tindora (Ivy Gourd)", "category": "Produce", "store": "Indian Groceries", "price": 3.49, "unit": "lb", "default_quantity": 1},
-        ]
 
     def _load_from_hub(self):
         """Load catalog from HuggingFace Hub"""
         try:
             print(f"🔄 Loading data from HuggingFace Hub ({self.hf_repo})...")
             
-            # Download file from Hub
+            # Download file from Hub (force_download to bypass cache)
             path = hf_hub_download(
                 repo_id=self.hf_repo,
                 filename=self.catalog_file,
                 repo_type="dataset",
-                token=self.hf_token
+                token=self.hf_token,
+                force_download=True  # Always get latest from Hub
             )
             
             # Parse JSON
@@ -169,11 +87,79 @@ class GroceryManager:
             print(f"✅ Data loaded from HuggingFace Hub!")
             print(f"   📦 Stores: {len(self.stores)}")
             print(f"   🛒 Shopping list items: {len(self.shopping_list)}")
+            
+            # Debug: Show categories for each store
+            for store_name, items in self.stores.items():
+                categories = set(item.get('category', 'Unknown') for item in items)
+                print(f"   🏪 {store_name}: {len(items)} items, categories: {sorted(categories)}")
+            
             return True
             
         except Exception as e:
             print(f"⚠️ Could not load from Hub: {e}")
             return False
+
+    def _merge_missing_defaults(self):
+        """Merge missing default items into existing Hub data (doesn't overwrite)"""
+        print("🔍 Running merge for missing default items...")
+        default_items = self._get_all_default_items()
+        
+        items_added = 0
+        for store_name, items in default_items.items():
+            print(f"   🏪 Checking store: {store_name}")
+            if store_name not in self.stores:
+                self.stores[store_name] = items
+                items_added += len(items)
+                print(f"   ➕ Added new store: {store_name} with {len(items)} items")
+            else:
+                # Check for missing items by ID
+                existing_ids = {item['id'] for item in self.stores[store_name]}
+                print(f"   📋 Existing IDs in {store_name}: {len(existing_ids)} items")
+                for item in items:
+                    if item['id'] not in existing_ids:
+                        self.stores[store_name].append(item)
+                        items_added += 1
+                        print(f"   ➕ Added missing item to {store_name}: {item['name']} (id: {item['id']})")
+                    else:
+                        print(f"   ⏭️ Skipping (already exists): {item['name']} (id: {item['id']})")
+        
+        if items_added > 0:
+            print(f"✅ Merged {items_added} missing default items")
+            print("💾 Saving merged data to Hub immediately...")
+            self._save_to_hub()  # Save immediately (not debounced) to ensure merge persists
+
+    def _get_all_default_items(self):
+        """Get all default items organized by store"""
+        # Trader Joe's defaults
+        tj_items = [
+            {"id": "tj-1", "name": "Bananas", "category": "Produce", "store": "Trader Joe's", "price": 0.19, "unit": "each", "default_quantity": 6},
+            {"id": "tj-2", "name": "Avocados", "category": "Produce", "store": "Trader Joe's", "price": 1.29, "unit": "each", "default_quantity": 3},
+            {"id": "tj-3", "name": "Baby Spinach", "category": "Produce", "store": "Trader Joe's", "price": 2.49, "unit": "bag", "default_quantity": 1},
+            {"id": "tj-4", "name": "Blueberries", "category": "Produce", "store": "Trader Joe's", "price": 3.49, "unit": "container", "default_quantity": 2},
+            {"id": "tj-5", "name": "Garlic", "category": "Produce", "store": "Trader Joe's", "price": 0.49, "unit": "head", "default_quantity": 2},
+            {"id": "tj-6", "name": "Strawberries", "category": "Produce", "store": "Trader Joe's", "price": 3.99, "unit": "container", "default_quantity": 1},
+            {"id": "tj-12", "name": "Cauliflower Gnocchi", "category": "Frozen", "store": "Trader Joe's", "price": 2.99, "unit": "bag", "default_quantity": 2},
+            {"id": "tj-13", "name": "Mandarin Chicken", "category": "Frozen", "store": "Trader Joe's", "price": 4.99, "unit": "package", "default_quantity": 1},
+            {"id": "tj-14", "name": "Fried Rice", "category": "Frozen", "store": "Trader Joe's", "price": 2.99, "unit": "bag", "default_quantity": 1},
+            {"id": "tj-16", "name": "Frozen Berries", "category": "Frozen", "store": "Trader Joe's", "price": 3.99, "unit": "bag", "default_quantity": 1},
+        ]
+        
+        # Safeway Frozen items (to merge if missing) - using unique IDs with timestamp
+        sw_frozen = [
+            {"id": "sw-frozen-001", "name": "Frozen Pizza", "category": "Frozen", "store": "Safeway", "price": 6.99, "unit": "each", "default_quantity": 1},
+            {"id": "sw-frozen-002", "name": "Ice Cream (Vanilla)", "category": "Frozen", "store": "Safeway", "price": 5.99, "unit": "container", "default_quantity": 1},
+            {"id": "sw-frozen-003", "name": "Frozen Mixed Vegetables", "category": "Frozen", "store": "Safeway", "price": 2.99, "unit": "bag", "default_quantity": 1},
+            {"id": "sw-frozen-004", "name": "Frozen Berries", "category": "Frozen", "store": "Safeway", "price": 4.99, "unit": "bag", "default_quantity": 1},
+            {"id": "sw-frozen-005", "name": "Frozen Waffles", "category": "Frozen", "store": "Safeway", "price": 3.99, "unit": "box", "default_quantity": 1},
+            {"id": "sw-frozen-006", "name": "Fish Sticks", "category": "Frozen", "store": "Safeway", "price": 5.49, "unit": "box", "default_quantity": 1},
+            {"id": "sw-frozen-007", "name": "Frozen Burritos", "category": "Frozen", "store": "Safeway", "price": 4.49, "unit": "pack", "default_quantity": 1},
+            {"id": "sw-frozen-008", "name": "Ice Cream Bars", "category": "Frozen", "store": "Safeway", "price": 5.99, "unit": "box", "default_quantity": 1},
+        ]
+        
+        return {
+            "Trader Joe's": tj_items,
+            "Safeway": sw_frozen,  # Only Frozen items - won't overwrite existing
+        }
 
     def _save_to_hub(self):
         """Save catalog to HuggingFace Hub"""
@@ -419,6 +405,16 @@ class GroceryManager:
             {"id": "sw-40", "name": "Krusteaz Buttermilk", "category": "Pantry", "store": "Safeway", "price": 4.99, "unit": "box", "default_quantity": 1},
             {"id": "sw-41", "name": "Cilantro", "category": "Produce", "store": "Safeway", "price": 1.49, "unit": "bunch", "default_quantity": 1},
             {"id": "sw-42", "name": "Bread", "category": "Bakery", "store": "Safeway", "price": 3.49, "unit": "loaf", "default_quantity": 1},
+            
+            # Frozen
+            {"id": "sw-43", "name": "Frozen Pizza", "category": "Frozen", "store": "Safeway", "price": 6.99, "unit": "each", "default_quantity": 1},
+            {"id": "sw-44", "name": "Ice Cream (Vanilla)", "category": "Frozen", "store": "Safeway", "price": 5.99, "unit": "container", "default_quantity": 1},
+            {"id": "sw-45", "name": "Frozen Mixed Vegetables", "category": "Frozen", "store": "Safeway", "price": 2.99, "unit": "bag", "default_quantity": 1},
+            {"id": "sw-46", "name": "Frozen Berries", "category": "Frozen", "store": "Safeway", "price": 4.99, "unit": "bag", "default_quantity": 1},
+            {"id": "sw-47", "name": "Frozen Waffles", "category": "Frozen", "store": "Safeway", "price": 3.99, "unit": "box", "default_quantity": 1},
+            {"id": "sw-48", "name": "Fish Sticks", "category": "Frozen", "store": "Safeway", "price": 5.49, "unit": "box", "default_quantity": 1},
+            {"id": "sw-49", "name": "Frozen Burritos", "category": "Frozen", "store": "Safeway", "price": 4.49, "unit": "pack", "default_quantity": 1},
+            {"id": "sw-50", "name": "Ice Cream Bars", "category": "Frozen", "store": "Safeway", "price": 5.99, "unit": "box", "default_quantity": 1},
         ]
         
         # Populate Costco items
