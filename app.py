@@ -1,3 +1,4 @@
+# Force update: Sun Jan  4 20:11:23 PST 2026
 import gradio as gr
 import pandas as pd
 from grocery_app import GroceryManager  # pyright: ignore[reportMissingImports]
@@ -526,13 +527,21 @@ def build_store_tab(store_name):
                            df["category"].str.lower().str.contains(search_lower, na=False)
                     df = df[mask]
                 
-                # Format as "Item Name - $X.XX (category)"
+                # Get set of item names already in shopping list for this store
+                items_in_list = set(
+                    item['name'] for item in grocery_manager.shopping_list 
+                    if item.get('store') == store_name
+                )
+                
+                # Format with 🟢 suffix if item is already in list
                 choices = []
                 for _, row in df.iterrows():
+                    suffix = " 🟢" if row['name'] in items_in_list else ""
+                    
                     if category == "All Categories":
-                        choices.append(f"{row['name']} - ${row['price']:.2f} ({row['category']})")
+                        choices.append(f"{row['name']} - ${row['price']:.2f} ({row['category']}){suffix}")
                     else:
-                        choices.append(f"{row['name']} - ${row['price']:.2f}")
+                        choices.append(f"{row['name']} - ${row['price']:.2f}{suffix}")
                 
                 return sorted(choices)
             
@@ -2188,3 +2197,4 @@ if __name__ == "__main__":
     demo.launch()# Deployed Wed Dec 31 17:45:16 PST 2025
 
 # Last updated: Wed Dec 31 17:46:34 PST 2025
+# Updated: Sun Jan  4 20:05:38 PST 2026
