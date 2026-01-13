@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -809,3 +810,120 @@ class GroceryManager:
             self.force_save()
             return True, f"🗑️ Deleted {deleted_count} archive(s)"
         return False, "No valid archives found"
+
+    # ============================================
+    # CATALOG MANAGEMENT METHODS
+    # ============================================
+    
+    def _normalize_text(self, text):
+        """Normalize text by converting Unicode formatted characters to ASCII."""
+        if not text:
+            return text
+        normalized = unicodedata.normalize('NFKD', text)
+        ascii_text = ''.join(c for c in normalized if not unicodedata.combining(c))
+        return ascii_text.strip()
+    
+    def add_catalog_item(self, store_name, name, category, price, unit="each"):
+        """Add a new item to the store catalog.
+        
+        Args:
+            store_name: Store name (e.g., "Trader Joe's")
+            name: Item name
+            category: Category (e.g., "Produce", "Dairy")
+            price: Price per unit
+            unit: Unit of measurement (default: "each")
+        
+        Returns:
+            Tuple of (success: bool, message: str, item: dict or None)
+        """
+        if not name or not category or price <= 0:
+            return False, "Please fill in all fields with valid values", None
+        
+        name_normalized = self._normalize_text(name.strip())
+        category_normalized = self._normalize_text(category.strip())
+        
+        # Check for duplicate item name (case-insensitive)
+        store_items = self.stores.get(store_name, [])
+        name_lower = name_normalized.lower()
+        for item in store_items:
+            if item.get("name", "").lower() == name_lower:
+                return False, f"Item '{name_normalized}' already exists in {store_name} catalog", None
+        
+        # Generate new ID
+        prefix = store_name[:2].lower().replace(" ", "").replace("'", "")
+        max_id = 0
+        for item in store_items:
+            item_id = item.get("id", "")
+            if item_id.startswith(prefix):
+                try:
+                    num = int(item_id.split("-")[1])
+                    max_id = max(max_id, num)
+                except:
+                    pass
+        
+        new_id = f"{prefix}-{max_id + 1}"
+        
+        new_item = {
+            "id": new_id,
+            "name": name_normalized,
+            "category": category_normalized,
+            "price": float(price),
+            "unit": unit.strip() if unit else "each",
+            "store": store_name,
+            "default_quantity": 1
+        }
+        
+        if store_name not in self.stores:
+            self.stores[store_name] = []
+        
+        self.stores[store_name].append(new_item)
+        self._schedule_save()
+        
+        return True, f"Added {name_normalized} to {store_name} catalog (ID: {new_id})", new_item
+    
+    def delete_catalog_item(self, store_name, item_id):
+        """Delete an item from the store catalog.
+        
+        Args:
+            store_name: Store name
+            item_id: ID of item to delete
+        
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        if not item_id or not item_id.strip():
+            return False, "Please provide an item ID to delete"
+        
+        store_items = self.stores.get(store_name, [])
+        item_id_clean = item_id.strip()
+        
+        for i, item in enumerate(store_items):
+            if item["id"] == item_id_clean:
+                removed_item = store_items.pop(i)
+                self._schedule_save()
+                return True, f"Removed '{removed_item['name']}' from {store_name} catalog"
+        
+        return False, f"Item '{item_id}' not found in {store_name} catalog"
+    
+    def search_catalog(self, query, store_name=None):
+        """Search for items in the catalog by name.
+        
+        Args:
+            query: Search term to find in item names
+            store_name: Optional store to limit search to
+        
+        Returns:
+            List of matching items
+        """
+        results = []
+        query_lower = query.lower().strip()
+        
+        stores_to_search = [store_name] if store_name else self.stores.keys()
+        
+        for store in stores_to_search:
+            items = self.stores.get(store, [])
+            for item in items:
+                if query_lower in item.get('name', '').lower():
+                    results.append(item.copy())
+        
+        return results

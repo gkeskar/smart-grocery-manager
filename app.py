@@ -2,7 +2,9 @@
 import gradio as gr
 import pandas as pd
 from grocery_app import GroceryManager  # pyright: ignore[reportMissingImports]
+from grocery_agents import GroceryAgentSystem  # pyright: ignore[reportMissingImports]
 import os
+import asyncio
 from dotenv import load_dotenv
 import unicodedata
 
@@ -27,6 +29,68 @@ except ImportError:
 
 # Initialize the grocery manager
 grocery_manager = GroceryManager()
+
+# Lazy-load the AI agent system (only initialize on first use)
+_agent_system = None
+
+def get_agent_system():
+    """Get or create the agent system (lazy loading for faster startup)."""
+    global _agent_system
+    if _agent_system is None:
+        try:
+            _agent_system = GroceryAgentSystem(grocery_manager)
+        except Exception as e:
+            print(f"Warning: AI Agent system not available: {e}")
+            return None
+    return _agent_system
+
+# AI Chat function
+def chat_with_ai(message):
+    """Send a message to the AI agent and get a response."""
+    if not message or not message.strip():
+        return "💡 Try asking: 'What's on my shopping list?' or 'Search for milk'"
+    
+    # Lazy load the agent system
+    agent_system = get_agent_system()
+    if agent_system is None:
+        return "❌ AI Assistant is not available. Please check your API keys (GROQ_API_KEY or GOOGLE_API_KEY)."
+    
+    try:
+        # Run the async agent in a sync context
+        response = asyncio.run(agent_system.run(message))
+        return response
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+# AI Chat Tab functions (with history display)
+def chat_respond(message, history):
+    """Handle chat messages with history display."""
+    if not message or not message.strip():
+        return history, ""
+    
+    agent_system = get_agent_system()
+    if agent_system is None:
+        history = history + [[message, "❌ AI Assistant is not available. Please check your API keys."]]
+        return history, ""
+    
+    try:
+        response = asyncio.run(agent_system.run(message))
+        history = history + [[message, response]]
+        return history, ""
+    except Exception as e:
+        history = history + [[message, f"❌ Error: {str(e)}"]]
+        return history, ""
+
+def clear_chat():
+    """Clear the chat history."""
+    agent_system = get_agent_system()
+    if agent_system:
+        agent_system.clear_history()
+    return [], ""
+
+def use_suggestion(suggestion_text):
+    """Fill input with suggestion text."""
+    return suggestion_text
 
 # Define functions for the Gradio interface
 
@@ -1088,7 +1152,8 @@ def build_store_tab(store_name):
     
     # Add new item to catalog
     def add_new_catalog_item(name, category, price, current_filter):
-        msg = add_catalog_item(store_name, name, category, price, "each")  # Default unit
+        success, message, item = grocery_manager.add_catalog_item(store_name, name, category, price, "each")
+        msg = f"✅ {message}" if success else f"❌ {message}"
         # Refresh catalog checkboxes
         choices = get_catalog_choices(current_filter, "")
         return msg, gr.CheckboxGroup(choices=choices, value=[]), "", 0, None
@@ -1612,7 +1677,17 @@ input[type="number"] {
 # Create the Gradio interface
 with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.Soft()) as demo:
     gr.Markdown("# 🛒 Smart Grocery Manager")
-    gr.Markdown("*💡 Tip: Dark mode follows your system settings, or use your browser's dark mode*")
+    
+    # AI Quick Chat Bar
+    with gr.Row():
+        ai_input = gr.Textbox(
+            placeholder="🤖 Ask AI: 'Add milk to my list', 'What's my budget?', 'Search for organic'...",
+            label="",
+            scale=5,
+            container=False
+        )
+        ai_ask_btn = gr.Button("Ask", scale=1, variant="primary")
+    ai_response = gr.Markdown("", visible=True)
     
     with gr.Tabs() as tabs:
         # Trader Joe's Tab
@@ -2081,6 +2156,41 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                          analytics_avg_trip, analytics_by_store, top_items_display]
             )
         
+        # AI Chat Tab
+        with gr.Tab("🤖 AI Chat"):
+            gr.Markdown("## AI Grocery Assistant")
+            gr.Markdown("Chat with your AI assistant to manage your grocery list and catalog.")
+            
+            # Chat display area (bubble style)
+            ai_chatbot = gr.Chatbot(
+                label="Chat History",
+                height=400,
+                bubble_full_width=False,
+                show_copy_button=True
+            )
+            
+            # Suggested prompts
+            gr.Markdown("### Quick Actions")
+            with gr.Row():
+                suggest_list_btn = gr.Button("📋 Show my shopping list", size="sm")
+                suggest_search_btn = gr.Button("🔍 Search catalog", size="sm")
+                suggest_budget_btn = gr.Button("💰 Check budget", size="sm")
+                suggest_add_btn = gr.Button("➕ Add item to list", size="sm")
+            
+            # Input area
+            with gr.Row():
+                ai_chat_input = gr.Textbox(
+                    placeholder="Ask me anything about your groceries...",
+                    label="",
+                    scale=5,
+                    container=False
+                )
+                ai_chat_send = gr.Button("Send", variant="primary", scale=1)
+            
+            # Clear button
+            with gr.Row():
+                ai_clear_btn = gr.Button("🗑️ Clear Chat", variant="secondary", size="sm")
+        
         # Settings Tab
         with gr.Tab("Settings"):
             gr.Markdown("## Application Settings")
@@ -2192,6 +2302,56 @@ with gr.Blocks(title="Smart Grocery Manager", css=MOBILE_CSS, theme=gr.themes.So
                 inputs=[tj_budget_input, sf_budget_input, co_budget_input, ig_budget_input, total_budget_input],
                 outputs=budget_message
             )
+    
+    # Wire up AI Quick Chat Bar
+    ai_ask_btn.click(
+        fn=chat_with_ai,
+        inputs=ai_input,
+        outputs=ai_response
+    )
+    
+    # Also trigger on Enter key
+    ai_input.submit(
+        fn=chat_with_ai,
+        inputs=ai_input,
+        outputs=ai_response
+    )
+    
+    # Wire up AI Chat Tab
+    ai_chat_send.click(
+        fn=chat_respond,
+        inputs=[ai_chat_input, ai_chatbot],
+        outputs=[ai_chatbot, ai_chat_input]
+    )
+    
+    ai_chat_input.submit(
+        fn=chat_respond,
+        inputs=[ai_chat_input, ai_chatbot],
+        outputs=[ai_chatbot, ai_chat_input]
+    )
+    
+    ai_clear_btn.click(
+        fn=clear_chat,
+        outputs=[ai_chatbot, ai_chat_input]
+    )
+    
+    # Quick action buttons - fill input with suggestion
+    suggest_list_btn.click(
+        fn=lambda: "Show me my current shopping list",
+        outputs=ai_chat_input
+    )
+    suggest_search_btn.click(
+        fn=lambda: "Search for ",
+        outputs=ai_chat_input
+    )
+    suggest_budget_btn.click(
+        fn=lambda: "What's my current budget status?",
+        outputs=ai_chat_input
+    )
+    suggest_add_btn.click(
+        fn=lambda: "Add ",
+        outputs=ai_chat_input
+    )
 
 if __name__ == "__main__":
     demo.launch()# Deployed Wed Dec 31 17:45:16 PST 2025
